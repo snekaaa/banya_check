@@ -1,0 +1,22 @@
+# Cloudflare Tunnel Configuration
+# Для работы с несколькими портами используем ingress правила
+
+tunnel: 6b7e99de-62d4-4067-bf1d-6cdb6b6b4a7c
+credentials-file: /Users/andreynosov/.cloudflared/6b7e99de-62d4-4067-bf1d-6cdb6b6b4a7c.json
+
+ingress:
+  # WebSocket сервер - отдельный путь для WebSocket
+  - hostname: z0y.ru
+    path: /ws
+    service: ws://localhost:3003
+    originRequest:
+      noTLSVerify: true
+
+  # Next.js приложение - весь остальной трафик
+  - hostname: z0y.ru
+    service: http://localhost:3001
+    originRequest:
+      noTLSVerify: true
+
+  # Catch-all правило (обязательно)
+  - service: http_status:404
