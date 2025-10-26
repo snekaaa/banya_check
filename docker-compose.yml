@@ -57,6 +57,22 @@ services:
     depends_on:
       - bot
 
+  # ngrok туннель
+  ngrok:
+    image: ngrok/ngrok:latest
+    container_name: banya-ngrok
+    restart: unless-stopped
+    command:
+      - "http"
+      - "app:3000"
+      - "--domain=raccoon-topical-ocelot.ngrok-free.app"
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN}
+    ports:
+      - "4040:4040"
+    depends_on:
+      - app
+
 volumes:
   postgres_data:
     driver: local
