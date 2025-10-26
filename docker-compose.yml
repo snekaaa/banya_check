@@ -1,0 +1,62 @@
+services:
+  # PostgreSQL база данных
+  postgres:
+    image: postgres:16-alpine
+    container_name: banya-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-banya_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-banya_password}
+      POSTGRES_DB: ${POSTGRES_DB:-banya_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-banya_user}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Telegram бот
+  bot:
+    build:
+      context: ./telegram-bot
+      dockerfile: Dockerfile
+    container_name: banya-bot
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-banya_user}:${POSTGRES_PASSWORD:-banya_password}@postgres:5432/${POSTGRES_DB:-banya_db}
+      BOT_TOKEN: ${BOT_TOKEN}
+      WEBHOOK_URL: ${WEBHOOK_URL:-}
+      WEBHOOK_PATH: ${WEBHOOK_PATH:-/webhook}
+      PORT: ${BOT_PORT:-3001}
+    ports:
+      - "${BOT_PORT:-3001}:${BOT_PORT:-3001}"
+    volumes:
+      - ./telegram-bot:/app
+      - /app/node_modules
+      - /app/generated
+    command: sh -c "npx prisma migrate deploy && node index.js"
+
+  # Next.js приложение
+  app:
+    build:
+      context: ./banya-check-app
+      dockerfile: Dockerfile
+    container_name: banya-app
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_BOT_USERNAME: ${NEXT_PUBLIC_BOT_USERNAME}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - bot
+
+volumes:
+  postgres_data:
+    driver: local
