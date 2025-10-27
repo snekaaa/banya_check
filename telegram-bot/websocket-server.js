@@ -1,12 +1,17 @@
 const WebSocket = require('ws');
 
 const WS_PORT = 3003;
+const PING_TIMEOUT = 10000; // 10 секунд
+const PING_CHECK_INTERVAL = 5000; // Проверяем каждые 5 секунд
 
 // Хранилище подключений: sessionId -> Set of WebSocket clients
 const sessionRooms = new Map();
 
 // Хранилище информации о пользователях: client -> {userId, sessionId}
 const clientInfo = new WeakMap();
+
+// Хранилище времени последнего ping: client -> timestamp
+const lastPingTime = new Map();
 
 const wss = new WebSocket.Server({ port: WS_PORT });
 
@@ -23,6 +28,9 @@ wss.on('connection', (ws) => {
 
         // Сохраняем информацию о клиенте
         clientInfo.set(ws, { sessionId, userId, userName, userAvatar, userColor });
+
+        // Инициализируем время последнего ping
+        lastPingTime.set(ws, Date.now());
 
         // Добавляем клиента в комнату сессии
         if (!sessionRooms.has(sessionId)) {
@@ -51,7 +59,14 @@ wss.on('connection', (ws) => {
 
       // Обработка события "ping" для поддержания соединения
       if (data.type === 'ping') {
-        ws.send(JSON.stringify({ type: 'pong' }));
+        // Обновляем время последнего ping
+        lastPingTime.set(ws, Date.now());
+
+        // Отправляем pong с текущим timestamp
+        ws.send(JSON.stringify({
+          type: 'pong',
+          timestamp: Date.now()
+        }));
       }
     } catch (error) {
       console.error('❌ Ошибка обработки сообщения:', error);
@@ -73,6 +88,9 @@ wss.on('connection', (ws) => {
           sessionRooms.delete(sessionId);
         }
       }
+
+      // Очищаем время последнего ping
+      lastPingTime.delete(ws);
 
       // Уведомляем всех в комнате
       broadcastToSession(sessionId, {
@@ -128,6 +146,51 @@ function getOnlineUsersInSession(sessionId) {
   return users;
 }
 
+// Интервал проверки timeout для неактивных клиентов
+setInterval(() => {
+  const now = Date.now();
+
+  // Проходимся по всем подключенным клиентам
+  lastPingTime.forEach((lastPing, ws) => {
+    const timeSinceLastPing = now - lastPing;
+
+    // Если прошло больше PING_TIMEOUT с последнего ping
+    if (timeSinceLastPing > PING_TIMEOUT) {
+      const info = clientInfo.get(ws);
+      if (info) {
+        const { sessionId, userId, userName } = info;
+        console.log(`⏰ Пользователь ${userId} (${userName}) отключён по таймауту (${timeSinceLastPing}ms)`);
+
+        // Удаляем из комнаты
+        if (sessionRooms.has(sessionId)) {
+          sessionRooms.get(sessionId).delete(ws);
+
+          if (sessionRooms.get(sessionId).size === 0) {
+            sessionRooms.delete(sessionId);
+          }
+        }
+
+        // Очищаем время последнего ping
+        lastPingTime.delete(ws);
+
+        // Уведомляем всех в комнате
+        broadcastToSession(sessionId, {
+          type: 'user_left',
+          userId,
+          userName,
+        });
+      }
+
+      // Закрываем соединение
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.close(1000, 'Ping timeout');
+      }
+    }
+  });
+}, PING_CHECK_INTERVAL);
+
 console.log(`🚀 WebSocket сервер запущен на порту ${WS_PORT}`);
+console.log(`⏱️  Timeout для неактивных клиентов: ${PING_TIMEOUT}ms`);
+console.log(`🔍 Проверка неактивных клиентов каждые ${PING_CHECK_INTERVAL}ms`);
 
 module.exports = wss;

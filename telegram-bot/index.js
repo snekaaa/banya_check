@@ -262,7 +262,7 @@ bot.action(/toggle_participant_(.+)_(.+)/, async (ctx) => {
       username: member.username,
       first_name: member.firstName,
       last_name: member.lastName
-    });
+    }, bot);
 
     const sessionData = sessionToLegacyFormat(session);
     const isSelected = sessionData.participants.some(p => p.id === memberId);

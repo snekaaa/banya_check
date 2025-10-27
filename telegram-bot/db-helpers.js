@@ -8,9 +8,35 @@ const COLORS = [
 ];
 
 /**
+ * Получить URL аватарки пользователя из Telegram
+ */
+async function getTelegramUserAvatar(bot, telegramId) {
+  try {
+    // Получаем фотографии профиля пользователя
+    const photos = await bot.telegram.getUserProfilePhotos(telegramId, 0, 1);
+
+    if (photos && photos.photos && photos.photos.length > 0) {
+      // Берем первое фото (самое актуальное)
+      const photo = photos.photos[0];
+      // Берем самое большое разрешение (последний элемент в массиве)
+      const fileId = photo[photo.length - 1].file_id;
+
+      // Получаем ссылку на файл через Telegram CDN
+      const fileLink = await bot.telegram.getFileLink(fileId);
+      return fileLink.href;
+    }
+  } catch (error) {
+    console.log(`⚠️ Не удалось получить аватар для пользователя ${telegramId}:`, error.message);
+  }
+
+  // Возвращаем null если не удалось получить аватар
+  return null;
+}
+
+/**
  * Получить или создать участника
  */
-async function getOrCreateParticipant(telegramUser) {
+async function getOrCreateParticipant(telegramUser, bot = null) {
   const { id: telegramId, username, first_name, last_name } = telegramUser;
 
   let participant = await prisma.participant.findUnique({
@@ -18,8 +44,17 @@ async function getOrCreateParticipant(telegramUser) {
   });
 
   if (!participant) {
-    // Генерируем аватар и цвет
-    const avatar = `https://i.pravatar.cc/150?img=${Math.floor(Math.random() * 70)}`;
+    // Пытаемся получить реальный аватар из Telegram
+    let avatar = null;
+    if (bot) {
+      avatar = await getTelegramUserAvatar(bot, telegramId);
+    }
+
+    // Если не удалось получить реальный аватар, используем заглушку
+    if (!avatar) {
+      avatar = `https://i.pravatar.cc/150?img=${Math.floor(Math.random() * 70)}`;
+    }
+
     const color = COLORS[Math.floor(Math.random() * COLORS.length)];
 
     participant = await prisma.participant.create({
@@ -32,6 +67,18 @@ async function getOrCreateParticipant(telegramUser) {
         color
       }
     });
+
+    console.log(`✅ Создан новый участник ${telegramId} с аватаром: ${avatar}`);
+  } else if (bot && participant.avatar && participant.avatar.includes('pravatar.cc')) {
+    // Если у существующего участника заглушка, пытаемся обновить на реальный аватар
+    const realAvatar = await getTelegramUserAvatar(bot, telegramId);
+    if (realAvatar) {
+      participant = await prisma.participant.update({
+        where: { telegramId: BigInt(telegramId) },
+        data: { avatar: realAvatar }
+      });
+      console.log(`✅ Обновлен аватар для участника ${telegramId}: ${realAvatar}`);
+    }
   }
 
   return participant;
