@@ -31,6 +31,7 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-banya_user}:${POSTGRES_PASSWORD:-banya_password}@postgres:5432/${POSTGRES_DB:-banya_db}
       BOT_TOKEN: ${BOT_TOKEN}
+      WEB_APP_URL: ${WEB_APP_URL}
       WEBHOOK_URL: ${WEBHOOK_URL:-}
       WEBHOOK_PATH: ${WEBHOOK_PATH:-/webhook}
       PORT: ${BOT_PORT:-3001}
@@ -52,6 +53,9 @@ services:
     environment:
       NODE_ENV: production
       NEXT_PUBLIC_BOT_USERNAME: ${NEXT_PUBLIC_BOT_USERNAME}
+      NEXT_PUBLIC_API_URL: ${WEB_APP_URL}
+      NEXT_PUBLIC_WS_URL: ${WEB_APP_WS_URL}
+      API_URL: http://bot:3002
     ports:
       - "3000:3000"
     depends_on:
