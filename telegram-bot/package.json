@@ -14,7 +14,11 @@
   "description": "",
   "dependencies": {
     "@prisma/client": "^6.17.1",
+    "cors": "^2.8.5",
     "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "form-data": "^4.0.4",
+    "multer": "^2.0.2",
     "pg": "^8.16.3",
     "prisma": "^6.17.1",
     "telegraf": "^4.16.3",

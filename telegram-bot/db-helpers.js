@@ -117,7 +117,8 @@ async function getSession(sessionId) {
         include: {
           participant: true
         }
-      }
+      },
+      items: true
     }
   });
 
@@ -260,12 +261,21 @@ function sessionToLegacyFormat(session) {
     createdAt: session.createdAt,
     participants: session.participants.map(sp => ({
       id: Number(sp.participant.telegramId),
+      name: sp.participant.firstName || sp.participant.username || 'Аноним',
       username: sp.participant.username,
       firstName: sp.participant.firstName,
       lastName: sp.participant.lastName,
       avatar: sp.participant.avatar,
       color: sp.participant.color,
       role: sp.role
+    })),
+    items: (session.items || []).map(item => ({
+      id: item.id,
+      name: item.name,
+      price: item.price,
+      quantity: item.quantity,
+      isCommon: item.isCommon,
+      selectedBy: [] // TODO: добавить логику выбора позиций
     }))
   };
 }

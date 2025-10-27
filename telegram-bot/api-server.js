@@ -1,73 +1,325 @@
-const http = require('http');
-const url = require('url');
-const { getSession, getActiveSessionsForChat, getSessionsForUser, sessionToLegacyFormat } = require('./db-helpers');
+const express = require('express');
+const cors = require('cors');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const { getSession, getSessionsForUser, sessionToLegacyFormat } = require('./db-helpers');
+const { uploadReceiptToTabScanner, getReceiptResult, parseLineItemsToCheckItems } = require('./tabscanner-service');
+const prisma = require('./prisma-client');
 
 const PORT = 3002;
+const UPLOADS_DIR = path.join(__dirname, 'uploads');
 
-const server = http.createServer((req, res) => {
-  // CORS headers
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+// Создаем папку для загрузок если её нет
+if (!fs.existsSync(UPLOADS_DIR)) {
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
 
-  if (req.method === 'OPTIONS') {
-    res.writeHead(200);
-    res.end();
-    return;
+// Настройка multer для загрузки файлов
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, UPLOADS_DIR);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, 'receipt-' + uniqueSuffix + path.extname(file.originalname));
   }
-
-  const parsedUrl = url.parse(req.url, true);
-  const pathname = parsedUrl.pathname;
-
-  // GET /api/session/:id or /api/sessions/:id
-  if (req.method === 'GET' && (pathname.startsWith('/api/session/') || pathname.startsWith('/api/sessions/'))) {
-    const pathParts = pathname.split('/');
-    const sessionId = pathParts[3];
-
-    // Проверяем, что это не /api/sessions/user/...
-    if (pathParts.length === 4) {
-      getSession(sessionId).then(session => {
-        if (!session) {
-          res.writeHead(404, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Session not found' }));
-          return;
-        }
-
-        const sessionData = sessionToLegacyFormat(session);
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(sessionData));
-      }).catch(error => {
-        console.error('Error fetching session:', error);
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Internal server error' }));
-      });
-      return;
-    }
-  }
-
-  // GET /api/sessions/user/:userId
-  if (req.method === 'GET' && pathname.startsWith('/api/sessions/user/')) {
-    const userId = parseInt(pathname.split('/')[4]);
-
-    getSessionsForUser(userId).then(sessions => {
-      // Преобразуем все сессии в legacy формат
-      const sessionsData = sessions.map(session => sessionToLegacyFormat(session));
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(sessionsData));
-    }).catch(error => {
-      console.error('Error fetching user sessions:', error);
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Internal server error' }));
-    });
-    return;
-  }
-
-  // 404
-  res.writeHead(404, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ error: 'Not found' }));
 });
 
-server.listen(PORT, () => {
+const upload = multer({
+  storage: storage,
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB максимум
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedMimes = ['image/jpeg', 'image/jpg', 'image/png'];
+    if (allowedMimes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only JPG and PNG images are allowed'));
+    }
+  }
+});
+
+const app = express();
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+
+// GET /api/session/:id or /api/sessions/:id
+app.get(['/api/session/:id', '/api/sessions/:id'], async (req, res) => {
+  try {
+    const { id } = req.params;
+    const session = await getSession(id);
+
+    if (!session) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+
+    const sessionData = sessionToLegacyFormat(session);
+    res.json(sessionData);
+  } catch (error) {
+    console.error('Error fetching session:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/sessions/user/:userId
+app.get('/api/sessions/user/:userId', async (req, res) => {
+  try {
+    const userId = parseInt(req.params.userId);
+    const sessions = await getSessionsForUser(userId);
+    const sessionsData = sessions.map(session => sessionToLegacyFormat(session));
+    res.json(sessionsData);
+  } catch (error) {
+    console.error('Error fetching user sessions:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/receipts/upload - загрузка фото чека
+app.post('/api/receipts/upload', upload.single('file'), async (req, res) => {
+  try {
+    const { sessionId } = req.body;
+
+    if (!sessionId) {
+      return res.status(400).json({ error: 'sessionId is required' });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    // Проверяем, что сессия существует
+    const session = await prisma.session.findUnique({
+      where: { id: sessionId }
+    });
+
+    if (!session) {
+      // Удаляем загруженный файл
+      fs.unlinkSync(req.file.path);
+      return res.status(404).json({ error: 'Session not found' });
+    }
+
+    // Загружаем чек в TabScanner
+    const { token } = await uploadReceiptToTabScanner(req.file.path);
+
+    // Сохраняем информацию о чеке в БД
+    const receipt = await prisma.receipt.create({
+      data: {
+        sessionId: sessionId,
+        filePath: req.file.path,
+        token: token,
+        status: 'processing',
+      }
+    });
+
+    res.json({
+      success: true,
+      receiptId: receipt.id,
+      token: token,
+      status: 'processing',
+    });
+  } catch (error) {
+    console.error('Error uploading receipt:', error);
+
+    // Удаляем файл в случае ошибки
+    if (req.file && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
+
+    res.status(500).json({
+      error: 'Failed to upload receipt',
+      message: error.message
+    });
+  }
+});
+
+// GET /api/receipts/status/:token - проверка статуса обработки
+app.get('/api/receipts/status/:token', async (req, res) => {
+  try {
+    const { token } = req.params;
+
+    // Находим чек по токену
+    const receipt = await prisma.receipt.findFirst({
+      where: { token: token }
+    });
+
+    if (!receipt) {
+      return res.status(404).json({ error: 'Receipt not found' });
+    }
+
+    // Если уже обработан, возвращаем сохраненные данные
+    if (receipt.status === 'completed' && receipt.rawData) {
+      const items = parseLineItemsToCheckItems(receipt.rawData.lineItems || []);
+      return res.json({
+        status: 'completed',
+        receiptId: receipt.id,
+        items: items,
+        rawData: receipt.rawData,
+      });
+    }
+
+    // Если ошибка, возвращаем статус
+    if (receipt.status === 'failed') {
+      return res.json({
+        status: 'failed',
+        error: 'Receipt processing failed',
+      });
+    }
+
+    // Запрашиваем статус у TabScanner
+    const result = await getReceiptResult(token);
+
+    if (result.status === 'processing') {
+      return res.json({ status: 'processing' });
+    }
+
+    // Обработка завершена, сохраняем результаты
+    const updatedReceipt = await prisma.receipt.update({
+      where: { id: receipt.id },
+      data: {
+        status: 'completed',
+        rawData: result,
+      }
+    });
+
+    const items = parseLineItemsToCheckItems(result.lineItems || []);
+
+    res.json({
+      status: 'completed',
+      receiptId: receipt.id,
+      items: items,
+      rawData: result,
+    });
+  } catch (error) {
+    console.error('Error checking receipt status:', error);
+
+    // Пытаемся пометить чек как failed
+    try {
+      await prisma.receipt.updateMany({
+        where: { token: req.params.token },
+        data: { status: 'failed' }
+      });
+    } catch (dbError) {
+      console.error('Error updating receipt status:', dbError);
+    }
+
+    res.status(500).json({
+      error: 'Failed to check receipt status',
+      message: error.message
+    });
+  }
+});
+
+// POST /api/receipts/confirm - подтверждение и сохранение позиций
+app.post('/api/receipts/confirm', async (req, res) => {
+  try {
+    const { receiptId, items, sessionId } = req.body;
+
+    if (!receiptId || !items || !Array.isArray(items)) {
+      return res.status(400).json({ error: 'receiptId and items array are required' });
+    }
+
+    if (!sessionId) {
+      return res.status(400).json({ error: 'sessionId is required' });
+    }
+
+
+    // Проверяем, что чек существует
+    const receipt = await prisma.receipt.findUnique({
+      where: { id: receiptId }
+    });
+
+    if (!receipt) {
+      return res.status(404).json({ error: 'Receipt not found' });
+    }
+
+    // Создаем позиции чека
+    const createdItems = await Promise.all(
+      items.map(item =>
+        prisma.checkItem.create({
+          data: {
+            sessionId: sessionId,
+            receiptId: receiptId,
+            name: item.name,
+            price: parseFloat(item.price),
+            quantity: parseFloat(item.quantity),
+            isCommon: Boolean(item.isCommon),
+          }
+        })
+      )
+    );
+
+    res.json({
+      success: true,
+      message: 'Items saved successfully',
+      items: createdItems,
+    });
+  } catch (error) {
+    console.error('Error confirming receipt:', error);
+    res.status(500).json({
+      error: 'Failed to save items',
+      message: error.message
+    });
+  }
+});
+
+// GET /api/sessions/:sessionId/items - получить все позиции для сессии
+app.get('/api/sessions/:sessionId/items', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+
+    const items = await prisma.checkItem.findMany({
+      where: { sessionId: sessionId },
+      orderBy: { createdAt: 'asc' }
+    });
+
+    res.json(items);
+  } catch (error) {
+    console.error('Error fetching session items:', error);
+    res.status(500).json({
+      error: 'Failed to fetch items',
+      message: error.message
+    });
+  }
+});
+
+// DELETE /api/items/:itemId - удалить позицию
+app.delete('/api/items/:itemId', async (req, res) => {
+  try {
+    const { itemId } = req.params;
+
+    await prisma.checkItem.delete({
+      where: { id: itemId }
+    });
+
+    res.json({ success: true, message: 'Item deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting item:', error);
+    res.status(500).json({
+      error: 'Failed to delete item',
+      message: error.message
+    });
+  }
+});
+
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({ error: 'Not found' });
+});
+
+// Error handler
+app.use((err, req, res, next) => {
+  console.error('Server error:', err);
+  res.status(500).json({
+    error: 'Internal server error',
+    message: err.message
+  });
+});
+
+const server = app.listen(PORT, () => {
   console.log(`📡 API server running on http://localhost:${PORT}`);
 });
 

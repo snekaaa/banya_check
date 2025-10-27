@@ -42,6 +42,8 @@ model Session {
   updatedAt    DateTime @updatedAt
 
   participants SessionParticipant[]
+  receipts     Receipt[]
+  items        CheckItem[]
 }
 
 // Связь участников и походов (многие-ко-многим)
@@ -57,4 +59,35 @@ model SessionParticipant {
   participant   Participant @relation(fields: [participantId], references: [id], onDelete: Cascade)
 
   @@unique([sessionId, participantId])
+}
+
+// Чек (фото чека и результат распознавания)
+model Receipt {
+  id          String   @id @default(cuid())
+  sessionId   String
+  filePath    String   // путь к сохраненному фото
+  status      String   @default("processing") // processing, completed, failed
+  token       String?  // токен TabScanner
+  rawData     Json?    // полный ответ от TabScanner
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  session     Session     @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  items       CheckItem[]
+}
+
+// Позиция чека (расход)
+model CheckItem {
+  id          String   @id @default(cuid())
+  sessionId   String
+  receiptId   String?
+  name        String
+  price       Float
+  quantity    Float    @default(1)
+  isCommon    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  session     Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  receipt     Receipt? @relation(fields: [receiptId], references: [id], onDelete: SetNull)
 }
