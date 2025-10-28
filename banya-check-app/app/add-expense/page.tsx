@@ -1,37 +1,82 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { useState, useEffect } from 'react';
 
 export default function AddExpense() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const sessionId = searchParams.get('sessionId');
+
   const [name, setName] = useState('');
   const [price, setPrice] = useState('');
   const [isCommon, setIsCommon] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
 
-  const handleSubmit = () => {
+  useEffect(() => {
+    if (!sessionId) {
+      alert('Session ID не найден');
+      router.back();
+    }
+  }, [sessionId, router]);
+
+  const handleSubmit = async () => {
+    console.log('[AddExpense] handleSubmit called');
+    console.log('[AddExpense] sessionId:', sessionId);
+    console.log('[AddExpense] name:', name, 'price:', price, 'isCommon:', isCommon);
+
     if (!name.trim() || !price) {
       alert('Заполните все поля');
       return;
     }
 
-    // TODO: Отправить данные на сервер
-    const expense = {
-      name: name.trim(),
-      price: parseFloat(price),
-      isCommon
-    };
+    setIsSubmitting(true);
 
-    console.log('Adding expense:', expense);
-    alert(`Добавлен расход: ${expense.name} - ${expense.price} ₽${expense.isCommon ? ' (общий)' : ''}`);
-    router.back();
+    try {
+      const url = `/api/sessions/${sessionId}/expenses`;
+      console.log('[AddExpense] Sending POST to:', url);
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: name.trim(),
+          price: parseFloat(price),
+          isCommon
+        }),
+      });
+
+      console.log('[AddExpense] Response status:', response.status);
+
+      if (!response.ok) {
+        throw new Error('Ошибка при добавлении расхода');
+      }
+
+      const data = await response.json();
+      console.log('Expense added:', data);
+
+      // Показываем модальное окно с подтверждением
+      setShowConfirmModal(true);
+
+      // Автоматически закрываем через 2 секунды
+      setTimeout(() => {
+        router.back();
+      }, 2000);
+    } catch (error) {
+      console.error('Error adding expense:', error);
+      alert('Ошибка при добавлении расхода. Попробуйте еще раз.');
+      setIsSubmitting(false);
+    }
   };
 
   return (
     <div className="min-h-screen bg-[var(--tg-theme-bg-color,#ffffff)] flex justify-center">
       <div className="w-full max-w-[420px] flex flex-col h-screen">
         {/* Header */}
-        <div className="sticky top-0 bg-[var(--tg-theme-bg-color,#ffffff)] border-b border-[var(--tg-theme-hint-color,#e0e0e0)] z-10">
+        <div className="sticky top-0 bg-[var(--tg-theme-bg-color,#ffffff)] z-10">
           <div className="p-4 flex items-center gap-3">
             <button
               onClick={() => router.back()}
@@ -131,17 +176,65 @@ export default function AddExpense() {
         </div>
 
         {/* Bottom button */}
-        <div className="fixed bottom-0 left-0 right-0 bg-[var(--tg-theme-bg-color,#ffffff)] border-t border-[var(--tg-theme-hint-color,#e0e0e0)] p-4">
+        <div className="fixed bottom-0 left-0 right-0 bg-[var(--tg-theme-bg-color,#ffffff)] p-4">
           <div className="max-w-[420px] mx-auto">
             <button
               onClick={handleSubmit}
+              disabled={isSubmitting}
               className="w-full bg-[var(--tg-theme-button-color,#3390ec)] text-[var(--tg-theme-button-text-color,#ffffff)]
-                         font-semibold py-4 rounded-xl transition-all active:scale-95"
+                         font-semibold py-4 rounded-xl transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Добавить расход
+              {isSubmitting ? 'Добавление...' : 'Добавить расход'}
             </button>
           </div>
         </div>
+
+        {/* Confirmation Modal */}
+        {showConfirmModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-[var(--tg-theme-bg-color,#ffffff)] rounded-2xl p-6 max-w-[340px] w-full max-h-[80vh] flex flex-col">
+              <div className="text-center mb-4">
+                <div className="text-5xl mb-3">✅</div>
+                <h2 className="text-xl font-bold text-[var(--tg-theme-text-color,#000000)] mb-2">
+                  Расход добавлен
+                </h2>
+              </div>
+
+              <div className="overflow-y-auto flex-1">
+                <div className="bg-[var(--tg-theme-secondary-bg-color,#f5f5f5)] rounded-xl p-4 space-y-2">
+                  <div className="text-sm text-[var(--tg-theme-hint-color,#999999)]">
+                    Название
+                  </div>
+                  <div className="text-base font-medium text-[var(--tg-theme-text-color,#000000)] break-words">
+                    {name}
+                  </div>
+
+                  <div className="text-sm text-[var(--tg-theme-hint-color,#999999)] mt-3">
+                    Сумма
+                  </div>
+                  <div className="text-2xl font-bold text-[var(--tg-theme-text-color,#000000)]">
+                    {price} ₽
+                  </div>
+
+                  <div className="text-sm text-[var(--tg-theme-hint-color,#999999)] mt-3">
+                    Тип
+                  </div>
+                  <div className="text-base font-medium text-[var(--tg-theme-text-color,#000000)]">
+                    {isCommon ? 'Общий' : 'Частичный'}
+                  </div>
+                </div>
+              </div>
+
+              <button
+                onClick={() => router.back()}
+                className="mt-4 w-full bg-[var(--tg-theme-button-color,#3390ec)] text-[var(--tg-theme-button-text-color,#ffffff)]
+                           font-semibold py-3 rounded-xl transition-all active:scale-95"
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

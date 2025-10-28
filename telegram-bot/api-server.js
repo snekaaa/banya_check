@@ -314,6 +314,50 @@ app.delete('/api/items/:itemId', async (req, res) => {
   }
 });
 
+// POST /api/sessions/:sessionId/expenses - добавить расход вручную
+app.post('/api/sessions/:sessionId/expenses', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { name, price, isCommon } = req.body;
+
+    if (!name || !price) {
+      return res.status(400).json({ error: 'name and price are required' });
+    }
+
+    // Проверяем, что сессия существует
+    const session = await prisma.session.findUnique({
+      where: { id: sessionId }
+    });
+
+    if (!session) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+
+    // Создаем расход
+    const expense = await prisma.checkItem.create({
+      data: {
+        sessionId: sessionId,
+        name: name.trim(),
+        price: parseFloat(price),
+        quantity: 1,
+        isCommon: Boolean(isCommon),
+      }
+    });
+
+    res.json({
+      success: true,
+      message: 'Expense added successfully',
+      expense: expense,
+    });
+  } catch (error) {
+    console.error('Error adding expense:', error);
+    res.status(500).json({
+      error: 'Failed to add expense',
+      message: error.message
+    });
+  }
+});
+
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({ error: 'Not found' });
