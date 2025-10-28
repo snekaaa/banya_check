@@ -80,16 +80,22 @@ app.get('/api/sessions/user/:userId', async (req, res) => {
 
 // POST /api/receipts/upload - загрузка фото чека
 app.post('/api/receipts/upload', upload.single('file'), async (req, res) => {
+  console.log('📸 Receipt upload request received');
   try {
     const { sessionId } = req.body;
+    console.log('SessionId:', sessionId);
 
     if (!sessionId) {
+      console.log('❌ No sessionId provided');
       return res.status(400).json({ error: 'sessionId is required' });
     }
 
     if (!req.file) {
+      console.log('❌ No file in request');
       return res.status(400).json({ error: 'No file uploaded' });
     }
+
+    console.log('✅ File received:', req.file.filename, 'Size:', req.file.size);
 
     // Проверяем, что сессия существует
     const session = await prisma.session.findUnique({
@@ -97,10 +103,13 @@ app.post('/api/receipts/upload', upload.single('file'), async (req, res) => {
     });
 
     if (!session) {
+      console.log('❌ Session not found:', sessionId);
       // Удаляем загруженный файл
       fs.unlinkSync(req.file.path);
       return res.status(404).json({ error: 'Session not found' });
     }
+
+    console.log('✅ Session found:', sessionId);
 
     // Загружаем чек в TabScanner
     const { token } = await uploadReceiptToTabScanner(req.file.path);

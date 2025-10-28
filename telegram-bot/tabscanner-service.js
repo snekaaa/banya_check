@@ -1,6 +1,7 @@
 const FormData = require('form-data');
 const fs = require('fs');
 const path = require('path');
+const https = require('https');
 
 const TABSCANNER_API_KEY = process.env.TABSCANNER_API_KEY;
 const TABSCANNER_BASE_URL = 'https://api.tabscanner.com';
@@ -15,42 +16,77 @@ async function uploadReceiptToTabScanner(filePath) {
     throw new Error('TABSCANNER_API_KEY is not set in environment variables');
   }
 
-  const formData = new FormData();
-  formData.append('file', fs.createReadStream(filePath));
-
-  // Опциональные параметры для лучшего распознавания
-  formData.append('documentType', 'receipt');
-  formData.append('region', 'ru'); // русский регион
-
-  try {
-    const response = await fetch(`${TABSCANNER_BASE_URL}/api/2/process`, {
-      method: 'POST',
-      headers: {
-        'apikey': TABSCANNER_API_KEY,
-        ...formData.getHeaders(),
-      },
-      body: formData,
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(`TabScanner API error: ${errorData.message || response.statusText}`);
-    }
-
-    const data = await response.json();
-
-    if (data.status !== 'success') {
-      throw new Error(`TabScanner processing failed: ${data.message || 'Unknown error'}`);
-    }
-
-    return {
-      token: data.result.token,
-      duplicate: data.result.duplicate || false,
-    };
-  } catch (error) {
-    console.error('Error uploading to TabScanner:', error);
-    throw error;
+  // Проверяем, что файл существует
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`File not found: ${filePath}`);
   }
+
+  // Получаем информацию о файле
+  const fileStats = fs.statSync(filePath);
+  const fileName = path.basename(filePath);
+
+  console.log(`📤 Uploading file to TabScanner: ${fileName} (${fileStats.size} bytes)`);
+
+  return new Promise((resolve, reject) => {
+    const formData = new FormData();
+
+    // Добавляем файл в form-data
+    formData.append('file', fs.createReadStream(filePath));
+
+    // Опциональные параметры для лучшего распознавания
+    formData.append('documentType', 'receipt');
+
+    // Отправляем запрос используя встроенный метод form.submit()
+    formData.submit({
+      host: 'api.tabscanner.com',
+      path: '/api/2/process',
+      protocol: 'https:',
+      headers: {
+        'apikey': TABSCANNER_API_KEY
+      }
+    }, (err, res) => {
+      if (err) {
+        console.error('❌ Error uploading to TabScanner:', err.message);
+        reject(err);
+        return;
+      }
+
+      let body = '';
+      res.on('data', chunk => body += chunk);
+      res.on('end', () => {
+        console.log('📥 TabScanner response status:', res.statusCode);
+        console.log('📥 TabScanner response:', body);
+
+        try {
+          const data = JSON.parse(body);
+
+          if (res.statusCode !== 200) {
+            reject(new Error(`TabScanner API error (${res.statusCode}): ${data.message || body}`));
+            return;
+          }
+
+          if (data.status !== 'success') {
+            reject(new Error(`TabScanner processing failed: ${data.message || data.status || 'Unknown error'}`));
+            return;
+          }
+
+          console.log('✅ TabScanner upload successful, token:', data.token);
+
+          resolve({
+            token: data.token,
+            duplicate: data.duplicate || false,
+          });
+        } catch (error) {
+          reject(new Error(`Failed to parse TabScanner response: ${body}`));
+        }
+      });
+
+      res.on('error', (error) => {
+        console.error('❌ Response error:', error.message);
+        reject(error);
+      });
+    });
+  });
 }
 
 /**
@@ -63,34 +99,58 @@ async function getReceiptResult(token) {
     throw new Error('TABSCANNER_API_KEY is not set in environment variables');
   }
 
-  try {
-    const response = await fetch(`${TABSCANNER_BASE_URL}/api/result/${token}`, {
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname: 'api.tabscanner.com',
+      path: `/api/result/${token}`,
       method: 'GET',
       headers: {
         'apikey': TABSCANNER_API_KEY,
-      },
+      }
+    };
+
+    const req = https.request(options, (res) => {
+      let body = '';
+
+      res.on('data', chunk => body += chunk);
+
+      res.on('end', () => {
+        try {
+          const data = JSON.parse(body);
+
+          if (res.statusCode !== 200) {
+            reject(new Error(`TabScanner API error (${res.statusCode}): ${data.message || body}`));
+            return;
+          }
+
+          // Если еще обрабатывается
+          if (data.status === 'processing') {
+            resolve({ status: 'processing' });
+            return;
+          }
+
+          // Если успешно завершено - возвращаем результат
+          // API может вернуть status: 'success' или просто иметь поле result
+          if (data.status === 'success' || data.result) {
+            resolve(data.result || data);
+            return;
+          }
+
+          // Если статус не success и нет result - это ошибка
+          reject(new Error(`TabScanner result failed: ${data.message || data.status || 'Unknown error'}`));
+        } catch (error) {
+          reject(new Error(`Failed to parse TabScanner response: ${body}`));
+        }
+      });
     });
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(`TabScanner API error: ${errorData.message || response.statusText}`);
-    }
+    req.on('error', (error) => {
+      console.error('Error fetching TabScanner result:', error);
+      reject(error);
+    });
 
-    const data = await response.json();
-
-    if (data.status === 'processing') {
-      return { status: 'processing' };
-    }
-
-    if (data.status !== 'success') {
-      throw new Error(`TabScanner result failed: ${data.message || 'Unknown error'}`);
-    }
-
-    return data.result;
-  } catch (error) {
-    console.error('Error fetching TabScanner result:', error);
-    throw error;
-  }
+    req.end();
+  });
 }
 
 /**
