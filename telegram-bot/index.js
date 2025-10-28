@@ -345,9 +345,10 @@ bot.action(/finish_selection_(.+)/, async (ctx) => {
 
     const participantNames = sessionData.participants.map(p => p.firstName || p.username).join(', ');
 
-    // Создаём новое сообщение с инструкцией
+    // Создаём сообщение с инструкцией
+    // Для каждого участника последняя активная сессия будет загружена автоматически
     await ctx.reply(
-      `✅ Поход создан!\n\n🏛 ${sessionData.venueName}\n📅 ${sessionData.date} в ${sessionData.time}\n👥 Участники (${sessionData.participants.length}): ${participantNames}\n\n💡 Откройте меню (≡) чтобы запустить БаняСчет`
+      `✅ Поход создан!\n\n🏛 ${sessionData.venueName}\n📅 ${sessionData.date} в ${sessionData.time}\n👥 Участники (${sessionData.participants.length}): ${participantNames}\n\n💡 Откройте БаняСчет:\n🔗 ${WEB_APP_URL}\n\nИли используйте кнопку меню (≡) в правом нижнем углу чата.`
     );
 
     await ctx.answerCbQuery('✅ Участники сохранены!');
