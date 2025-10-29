@@ -3,7 +3,7 @@ const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { getSession, getSessionsForUser, sessionToLegacyFormat } = require('./db-helpers');
+const { getSession, getSessionsForUser, getSessionWithItems, sessionToLegacyFormat, saveItemSelection, deleteItemSelection } = require('./db-helpers');
 const { uploadReceiptToTabScanner, getReceiptResult, parseLineItemsToCheckItems } = require('./tabscanner-service');
 const prisma = require('./prisma-client');
 const { broadcastToSession } = require('./websocket-server');
@@ -52,7 +52,7 @@ app.use(express.json());
 app.get(['/api/session/:id', '/api/sessions/:id'], async (req, res) => {
   try {
     const { id } = req.params;
-    const session = await getSession(id);
+    const session = await getSessionWithItems(id);
 
     if (!session) {
       return res.status(404).json({ error: 'Session not found' });
@@ -360,6 +360,132 @@ app.post('/api/sessions/:sessionId/expenses', async (req, res) => {
     console.error('Error adding expense:', error);
     res.status(500).json({
       error: 'Failed to add expense',
+      message: error.message
+    });
+  }
+});
+
+// POST /api/items/:itemId/select - выбрать позицию
+app.post('/api/items/:itemId/select', async (req, res) => {
+  try {
+    const { itemId } = req.params;
+    const { participantId, telegramId, quantity } = req.body;
+
+    if (!participantId && !telegramId) {
+      return res.status(400).json({ error: 'participantId or telegramId is required' });
+    }
+
+    if (quantity === undefined || quantity === null) {
+      return res.status(400).json({ error: 'quantity is required' });
+    }
+
+    // Проверяем, что позиция существует
+    const checkItem = await prisma.checkItem.findUnique({
+      where: { id: itemId }
+    });
+
+    if (!checkItem) {
+      return res.status(404).json({ error: 'Item not found' });
+    }
+
+    // Если передан telegramId, находим участника
+    let actualParticipantId = participantId;
+    if (telegramId && !participantId) {
+      const participant = await prisma.participant.findUnique({
+        where: { telegramId: BigInt(telegramId) }
+      });
+
+      if (!participant) {
+        return res.status(404).json({ error: 'Participant not found' });
+      }
+
+      actualParticipantId = participant.id;
+    }
+
+    // Сохраняем или обновляем выбор
+    const selection = await saveItemSelection(itemId, actualParticipantId, parseFloat(quantity));
+
+    // Отправляем уведомление всем подключенным к сессии
+    broadcastToSession(checkItem.sessionId, {
+      type: 'item_selection_updated',
+      sessionId: checkItem.sessionId,
+      itemId: itemId,
+      participantId: actualParticipantId,
+      quantity: parseFloat(quantity)
+    });
+
+    res.json({
+      success: true,
+      message: 'Selection saved successfully',
+      selection: {
+        id: selection.id,
+        checkItemId: selection.checkItemId,
+        participantId: selection.participantId,
+        quantity: selection.quantity,
+      }
+    });
+  } catch (error) {
+    console.error('Error saving item selection:', error);
+    res.status(500).json({
+      error: 'Failed to save selection',
+      message: error.message
+    });
+  }
+});
+
+// DELETE /api/items/:itemId/unselect - убрать выбор позиции
+app.delete('/api/items/:itemId/unselect', async (req, res) => {
+  try {
+    const { itemId } = req.params;
+    const { participantId, telegramId } = req.body;
+
+    if (!participantId && !telegramId) {
+      return res.status(400).json({ error: 'participantId or telegramId is required' });
+    }
+
+    // Проверяем, что позиция существует
+    const checkItem = await prisma.checkItem.findUnique({
+      where: { id: itemId }
+    });
+
+    if (!checkItem) {
+      return res.status(404).json({ error: 'Item not found' });
+    }
+
+    // Если передан telegramId, находим участника
+    let actualParticipantId = participantId;
+    if (telegramId && !participantId) {
+      const participant = await prisma.participant.findUnique({
+        where: { telegramId: BigInt(telegramId) }
+      });
+
+      if (!participant) {
+        return res.status(404).json({ error: 'Participant not found' });
+      }
+
+      actualParticipantId = participant.id;
+    }
+
+    // Удаляем выбор
+    await deleteItemSelection(itemId, actualParticipantId);
+
+    // Отправляем уведомление всем подключенным к сессии
+    broadcastToSession(checkItem.sessionId, {
+      type: 'item_selection_updated',
+      sessionId: checkItem.sessionId,
+      itemId: itemId,
+      participantId: actualParticipantId,
+      quantity: 0
+    });
+
+    res.json({
+      success: true,
+      message: 'Selection removed successfully'
+    });
+  } catch (error) {
+    console.error('Error removing item selection:', error);
+    res.status(500).json({
+      error: 'Failed to remove selection',
       message: error.message
     });
   }

@@ -245,6 +245,92 @@ async function getSessionsForUser(userId) {
 }
 
 /**
+ * Создать или обновить выбор позиции участником
+ */
+async function saveItemSelection(checkItemId, participantId, quantity) {
+  const selection = await prisma.itemSelection.upsert({
+    where: {
+      checkItemId_participantId: {
+        checkItemId,
+        participantId
+      }
+    },
+    create: {
+      checkItemId,
+      participantId,
+      quantity
+    },
+    update: {
+      quantity
+    },
+    include: {
+      participant: true,
+      checkItem: true
+    }
+  });
+
+  return selection;
+}
+
+/**
+ * Удалить выбор позиции участником
+ */
+async function deleteItemSelection(checkItemId, participantId) {
+  await prisma.itemSelection.deleteMany({
+    where: {
+      checkItemId,
+      participantId
+    }
+  });
+}
+
+/**
+ * Получить все выборы для сессии
+ */
+async function getItemSelections(sessionId) {
+  const selections = await prisma.itemSelection.findMany({
+    where: {
+      checkItem: {
+        sessionId
+      }
+    },
+    include: {
+      participant: true,
+      checkItem: true
+    }
+  });
+
+  return selections;
+}
+
+/**
+ * Получить сессию с позициями и выборами участников
+ */
+async function getSessionWithItems(sessionId) {
+  const session = await prisma.session.findUnique({
+    where: { id: sessionId },
+    include: {
+      participants: {
+        include: {
+          participant: true
+        }
+      },
+      items: {
+        include: {
+          selections: {
+            include: {
+              participant: true
+            }
+          }
+        }
+      }
+    }
+  });
+
+  return session;
+}
+
+/**
  * Преобразовать сессию из БД в формат для бота (совместимость со старым кодом)
  */
 function sessionToLegacyFormat(session) {
@@ -275,7 +361,13 @@ function sessionToLegacyFormat(session) {
       price: item.price,
       quantity: item.quantity,
       isCommon: item.isCommon,
-      selectedBy: [] // TODO: добавить логику выбора позиций
+      selectedBy: (item.selections || []).map(sel => ({
+        userId: Number(sel.participant.telegramId),
+        userName: sel.participant.firstName || sel.participant.username || 'Аноним',
+        userAvatar: sel.participant.avatar,
+        userColor: sel.participant.color,
+        quantity: sel.quantity
+      }))
     }))
   };
 }
@@ -289,5 +381,9 @@ module.exports = {
   removeParticipantFromSession,
   getActiveSessionsForChat,
   getSessionsForUser,
+  saveItemSelection,
+  deleteItemSelection,
+  getItemSelections,
+  getSessionWithItems,
   sessionToLegacyFormat
 };

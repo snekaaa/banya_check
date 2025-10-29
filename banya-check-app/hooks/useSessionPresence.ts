@@ -16,6 +16,7 @@ interface UseSessionPresenceProps {
   userAvatar: string | null;
   userColor: string | null;
   onExpensesUpdated?: () => void;
+  onItemSelectionUpdated?: () => void;
 }
 
 type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
@@ -27,6 +28,7 @@ export function useSessionPresence({
   userAvatar,
   userColor,
   onExpensesUpdated,
+  onItemSelectionUpdated,
 }: UseSessionPresenceProps) {
   const [onlineUsers, setOnlineUsers] = useState<OnlineUser[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
@@ -188,6 +190,13 @@ export function useSessionPresence({
               }
               break;
 
+            case 'item_selection_updated':
+              // Выбор позиции обновился - перезагружаем данные
+              if (onItemSelectionUpdated) {
+                onItemSelectionUpdated();
+              }
+              break;
+
             default:
               // Игнорируем неизвестные типы сообщений
               break;
@@ -227,7 +236,7 @@ export function useSessionPresence({
       setConnectionStatus('disconnected');
       scheduleReconnect();
     }
-  }, [sessionId, userId, userName, userAvatar, userColor, onExpensesUpdated, startPingInterval, scheduleReconnect]);
+  }, [sessionId, userId, userName, userAvatar, userColor, onExpensesUpdated, onItemSelectionUpdated, startPingInterval, scheduleReconnect]);
 
   // Подключаемся при монтировании и при изменении данных
   useEffect(() => {

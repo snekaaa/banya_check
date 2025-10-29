@@ -55,6 +55,7 @@ function HomeContent() {
   const [sessionData, setSessionData] = useState<SessionData | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedItems, setSelectedItems] = useState<Map<string, number>>(new Map());
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
 
   // Функция для перезагрузки данных сессии
   const reloadSessionData = useCallback(async () => {
@@ -80,13 +81,31 @@ function HomeContent() {
     userAvatar: user?.photo_url || null,
     userColor: null,
     onExpensesUpdated: reloadSessionData,
+    onItemSelectionUpdated: reloadSessionData,
   });
 
-  // Отладочное логирование
+  // Отладочное логирование (можно убрать в продакшене)
   useEffect(() => {
-    console.log('📡 WebSocket статус:', connectionStatus);
-    console.log('👥 Онлайн пользователи:', onlineUsers);
+    if (process.env.NODE_ENV === 'development') {
+      console.log('📡 WebSocket статус:', connectionStatus);
+      console.log('👥 Онлайн пользователи:', onlineUsers);
+    }
   }, [connectionStatus, onlineUsers]);
+
+  // Инициализация selectedItems из данных сессии
+  useEffect(() => {
+    if (!sessionData || !user) return;
+
+    const newSelectedItems = new Map<string, number>();
+    sessionData.items.forEach(item => {
+      const userSelection = item.selectedBy.find(share => share.userId === user.id);
+      if (userSelection && userSelection.quantity > 0) {
+        newSelectedItems.set(item.id, userSelection.quantity);
+      }
+    });
+
+    setSelectedItems(newSelectedItems);
+  }, [sessionData, user]);
 
   // Загружаем данные сессии
   useEffect(() => {
@@ -152,35 +171,119 @@ function HomeContent() {
   }, [sessionIdFromParams, user, router]);
 
   // Обрабатываем выбор/снятие выбора позиции
-  const handleItemToggle = useCallback((itemId: string) => {
+  const handleItemToggle = useCallback(async (itemId: string) => {
+    const isCurrentlySelected = selectedItems.has(itemId);
+
+    // Оптимистичное обновление UI
     setSelectedItems(prev => {
       const newMap = new Map(prev);
-      if (newMap.has(itemId)) {
+      if (isCurrentlySelected) {
         newMap.delete(itemId);
       } else {
         newMap.set(itemId, 1);
       }
       return newMap;
     });
-  }, []);
 
-  // Обрабатываем изменение количества
-  const handleQuantityChange = useCallback((itemId: string, quantity: number) => {
-    if (quantity <= 0) {
+    try {
+      if (!user?.id) {
+        console.error('No user ID found');
+        return;
+      }
+
+      if (isCurrentlySelected) {
+        // Убираем выбор
+        const response = await fetch(`/api/items/${itemId}/unselect`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ telegramId: user.id }),
+        });
+
+        if (response.ok) {
+          // Принудительно перезагружаем данные после успешного снятия выбора
+          await reloadSessionData();
+        }
+      } else {
+        // Выбираем позицию
+        const response = await fetch(`/api/items/${itemId}/select`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            telegramId: user.id,
+            quantity: 1
+          }),
+        });
+
+        if (response.ok) {
+          // Принудительно перезагружаем данные после успешного выбора
+          await reloadSessionData();
+        }
+      }
+    } catch (error) {
+      console.error('Error toggling item selection:', error);
+      // Откатываем изменения при ошибке
       setSelectedItems(prev => {
         const newMap = new Map(prev);
-        newMap.delete(itemId);
+        if (isCurrentlySelected) {
+          newMap.set(itemId, 1);
+        } else {
+          newMap.delete(itemId);
+        }
         return newMap;
       });
+    }
+  }, [selectedItems, user, reloadSessionData]);
+
+  // Обрабатываем изменение количества
+  const handleQuantityChange = useCallback(async (itemId: string, quantity: number) => {
+    if (quantity <= 0) {
+      // Если количество 0 или меньше, убираем выбор
+      handleItemToggle(itemId);
       return;
     }
 
+    // Оптимистичное обновление UI
+    const previousQuantity = selectedItems.get(itemId);
     setSelectedItems(prev => {
       const newMap = new Map(prev);
       newMap.set(itemId, quantity);
       return newMap;
     });
-  }, []);
+
+    try {
+      if (!user?.id) {
+        console.error('No user ID found');
+        return;
+      }
+
+      // Обновляем количество на сервере
+      const response = await fetch(`/api/items/${itemId}/select`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          telegramId: user.id,
+          quantity: quantity
+        }),
+      });
+
+      if (response.ok) {
+        // Принудительно перезагружаем данные после успешного изменения количества
+        await reloadSessionData();
+      }
+    } catch (error) {
+      console.error('Error updating item quantity:', error);
+      // Откатываем изменения при ошибке
+      setSelectedItems(prev => {
+        const newMap = new Map(prev);
+        if (previousQuantity !== undefined) {
+          newMap.set(itemId, previousQuantity);
+        } else {
+          newMap.delete(itemId);
+        }
+        return newMap;
+      });
+    }
+  }, [selectedItems, user, handleItemToggle, reloadSessionData]);
 
   // Рассчитываем суммы
   const { totalAmount, userAmount } = useMemo(() => {
@@ -385,10 +488,13 @@ function HomeContent() {
                 {/* Чекбокс */}
                 <button
                   onClick={() => handleItemToggle(item.id)}
-                  className={`w-6 h-6 rounded-full border-2 flex items-center justify-center flex-shrink-0 mt-0.5 ${
+                  disabled={!item.isCommon && !isSelected && remaining <= 0}
+                  className={`w-6 h-6 rounded-full border-2 flex items-center justify-center flex-shrink-0 mt-0.5 transition-all ${
                     isSelected
                       ? 'bg-white border-white'
-                      : 'border-[var(--tg-theme-hint-color,#999999)]'
+                      : remaining <= 0 && !item.isCommon
+                      ? 'border-[var(--tg-theme-hint-color,#999999)] opacity-30 cursor-not-allowed'
+                      : 'border-[var(--tg-theme-hint-color,#999999)] hover:border-[var(--tg-theme-button-color,#3390ec)]'
                   }`}
                 >
                   {isSelected && (
@@ -421,64 +527,80 @@ function HomeContent() {
                   {/* Редактор количества для частичных позиций */}
                   {!item.isCommon && isSelected && (
                     <div className="mb-3">
-                      <div className="flex items-center gap-3">
-                        <div className="flex items-center gap-2 bg-white/20 rounded-lg px-3 py-2">
-                          <button
-                            onClick={() => handleQuantityChange(item.id, selectedQuantity - 0.1)}
-                            className="text-white text-xl font-bold w-6 h-6 flex items-center justify-center"
-                          >
-                            −
-                          </button>
-                          <input
-                            type="number"
-                            value={selectedQuantity}
-                            onChange={(e) => {
-                              const val = parseFloat(e.target.value);
-                              if (!isNaN(val)) {
-                                handleQuantityChange(item.id, val);
-                              }
-                            }}
-                            className="w-16 bg-transparent text-white text-center font-semibold outline-none"
-                            step="0.1"
-                            min="0"
-                          />
-                          <button
-                            onClick={() => handleQuantityChange(item.id, selectedQuantity + 0.1)}
-                            className="text-white text-xl font-bold w-6 h-6 flex items-center justify-center"
-                          >
-                            +
-                          </button>
+                      {editingItemId === item.id ? (
+                        // Показываем редактор количества
+                        <div>
+                          <div className="flex items-center gap-3">
+                            <div className="flex items-center gap-2 bg-white/20 rounded-lg px-3 py-2">
+                              <button
+                                onClick={() => handleQuantityChange(item.id, Math.max(1, selectedQuantity - 1))}
+                                className="text-white text-xl font-bold w-6 h-6 flex items-center justify-center"
+                              >
+                                −
+                              </button>
+                              <input
+                                type="number"
+                                value={Math.round(selectedQuantity)}
+                                onChange={(e) => {
+                                  const val = parseInt(e.target.value);
+                                  if (!isNaN(val) && val > 0) {
+                                    handleQuantityChange(item.id, val);
+                                  }
+                                }}
+                                className="w-16 bg-transparent text-white text-center font-semibold outline-none"
+                                min="1"
+                              />
+                              <button
+                                onClick={() => handleQuantityChange(item.id, selectedQuantity + 1)}
+                                className="text-white text-xl font-bold w-6 h-6 flex items-center justify-center"
+                              >
+                                +
+                              </button>
+                            </div>
+                            <button
+                              onClick={() => setEditingItemId(null)}
+                              className="px-3 py-2 bg-white/20 rounded-lg text-white text-sm font-medium"
+                            >
+                              OK
+                            </button>
+                            <button
+                              onClick={() => {
+                                setEditingItemId(null);
+                                handleItemToggle(item.id);
+                              }}
+                              className="px-3 py-2 bg-white/20 rounded-lg text-white text-sm"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                          <div className="mt-2 text-sm text-white/80">
+                            Вы берете: {Math.round(selectedQuantity)} шт • {Math.round(item.price * selectedQuantity)} ₽
+                          </div>
                         </div>
+                      ) : (
+                        // Показываем кнопку "Изменить"
                         <button
-                          onClick={() => handleQuantityChange(item.id, selectedQuantity)}
+                          onClick={() => setEditingItemId(item.id)}
                           className="px-3 py-2 bg-white/20 rounded-lg text-white text-sm font-medium"
                         >
-                          OK
+                          Изменить
                         </button>
-                        <button
-                          onClick={() => handleItemToggle(item.id)}
-                          className="px-3 py-2 bg-white/20 rounded-lg text-white text-sm"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                      <div className="mt-2 text-sm text-white/80">
-                        Вы берете: {selectedQuantity} шт • {Math.round(item.price * selectedQuantity)} ₽
-                      </div>
+                      )}
                     </div>
                   )}
 
                   {/* Информация о выборе */}
                   {!item.isCommon && (
                     <div className={`text-sm mb-2 ${isSelected ? 'text-white/80' : 'text-[var(--tg-theme-hint-color,#999999)]'}`}>
-                      {item.quantity > 1 && `× ${item.quantity}`}
-                      {totalSelected > 0 && (
+                      {totalSelected > 0 ? (
                         <>
-                          {' • '}
-                          Выбрано {totalSelected.toFixed(1)} из {item.quantity} • осталось {remaining.toFixed(1)}
+                          Выбрано {Math.round(totalSelected)} из {Math.round(item.quantity)}
+                          {remaining > 0 && ` • осталось ${Math.round(remaining)}`}
+                          {remaining <= 0 && ' • все выбрали'}
                         </>
+                      ) : (
+                        'Никто не выбрал'
                       )}
-                      {totalSelected === 0 && ' • Никто не выбрал'}
                     </div>
                   )}
 
@@ -499,11 +621,11 @@ function HomeContent() {
                               // eslint-disable-next-line @next/next/no-img-element
                               <img
                                 src={share.userAvatar}
-                                alt={share.userName}
+                                alt={share.userName || 'User'}
                                 className="w-full h-full rounded-full object-cover"
                               />
                             ) : (
-                              share.userName.charAt(0).toUpperCase()
+                              (share.userName || 'U').charAt(0).toUpperCase()
                             )}
                           </div>
                         );

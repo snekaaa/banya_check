@@ -27,6 +27,7 @@ model Participant {
   updatedAt    DateTime @updatedAt
 
   sessions     SessionParticipant[]
+  itemSelections ItemSelection[]
 }
 
 // Поход в баню (сессия)
@@ -90,4 +91,20 @@ model CheckItem {
 
   session     Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   receipt     Receipt? @relation(fields: [receiptId], references: [id], onDelete: SetNull)
+  selections  ItemSelection[]
+}
+
+// Выбор позиций участниками
+model ItemSelection {
+  id            String   @id @default(cuid())
+  checkItemId   String
+  participantId String
+  quantity      Float
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  checkItem     CheckItem    @relation(fields: [checkItemId], references: [id], onDelete: Cascade)
+  participant   Participant  @relation(fields: [participantId], references: [id], onDelete: Cascade)
+
+  @@unique([checkItemId, participantId])
 }
