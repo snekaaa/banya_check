@@ -280,9 +280,9 @@ function HomeContent() {
   }
 
   return (
-    <div className="min-h-screen bg-[var(--tg-theme-bg-color,#ffffff)] pb-24">
+    <div className="min-h-screen bg-[var(--tg-theme-bg-color,#ffffff)] pb-4">
       {/* Шапка с названием и датой */}
-      <div className="sticky top-0 z-10 bg-[var(--tg-theme-bg-color,#ffffff)] border-b border-[var(--tg-theme-secondary-bg-color,#f5f5f5)]">
+      <div className="bg-[var(--tg-theme-bg-color,#ffffff)] border-b border-[var(--tg-theme-secondary-bg-color,#f5f5f5)]">
         <div className="px-4 py-3">
           <div className="flex items-center gap-2">
             <button
@@ -510,7 +510,7 @@ function HomeContent() {
       </div>
 
       {/* Итоги */}
-      <div className="fixed bottom-0 left-0 right-0 bg-[var(--tg-theme-bg-color,#ffffff)] border-t border-[var(--tg-theme-secondary-bg-color,#f5f5f5)] p-4 pb-20">
+      <div className="bg-[var(--tg-theme-secondary-bg-color,#f5f5f5)] p-4 mx-4 rounded-xl mb-4">
         <div className="flex justify-between items-center mb-2">
           <div className="text-[var(--tg-theme-hint-color,#999999)]">Общий счёт:</div>
           <div className="text-2xl font-bold text-[var(--tg-theme-text-color,#000000)]">

@@ -22,6 +22,7 @@ function ConfirmReceiptContent() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
 
   useEffect(() => {
     if (!token) {
@@ -126,9 +127,13 @@ function ConfirmReceiptContent() {
         throw new Error(errorData.message || 'Ошибка сохранения');
       }
 
-      // Успешно сохранено
-      alert('Позиции добавлены!');
-      router.push('/');
+      // Успешно сохранено - показываем модальное окно
+      setShowConfirmModal(true);
+
+      // Автоматически закрываем через 2 секунды
+      setTimeout(() => {
+        router.push('/');
+      }, 2000);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка сохранения');
       setSaving(false);
@@ -296,6 +301,46 @@ function ConfirmReceiptContent() {
             </button>
           </div>
         </div>
+
+        {/* Confirmation Modal */}
+        {showConfirmModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-[var(--tg-theme-bg-color,#ffffff)] rounded-2xl p-6 max-w-[340px] w-full max-h-[80vh] flex flex-col">
+              <div className="text-center mb-4">
+                <div className="text-5xl mb-3">✅</div>
+                <h2 className="text-xl font-bold text-[var(--tg-theme-text-color,#000000)] mb-2">
+                  Позиции добавлены!
+                </h2>
+              </div>
+
+              <div className="overflow-y-auto flex-1">
+                <div className="bg-[var(--tg-theme-secondary-bg-color,#f5f5f5)] rounded-xl p-4 space-y-2">
+                  <div className="text-sm text-[var(--tg-theme-hint-color,#999999)]">
+                    Добавлено позиций
+                  </div>
+                  <div className="text-2xl font-bold text-[var(--tg-theme-text-color,#000000)]">
+                    {items.length}
+                  </div>
+
+                  <div className="text-sm text-[var(--tg-theme-hint-color,#999999)] mt-3">
+                    Общая сумма
+                  </div>
+                  <div className="text-2xl font-bold text-[var(--tg-theme-text-color,#000000)]">
+                    {Math.round(totalAmount)} ₽
+                  </div>
+                </div>
+              </div>
+
+              <button
+                onClick={() => router.push('/')}
+                className="mt-4 w-full bg-[var(--tg-theme-button-color,#3390ec)] text-[var(--tg-theme-button-text-color,#ffffff)]
+                           font-semibold py-3 rounded-xl transition-all active:scale-95"
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
