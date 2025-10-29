@@ -3,7 +3,19 @@ const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { getSession, getSessionsForUser, getSessionWithItems, sessionToLegacyFormat, saveItemSelection, deleteItemSelection } = require('./db-helpers');
+const {
+  getSession,
+  getSessionsForUser,
+  getSessionWithItems,
+  sessionToLegacyFormat,
+  saveItemSelection,
+  deleteItemSelection,
+  confirmParticipantSelection,
+  unconfirmParticipantSelection,
+  createPayment,
+  updatePayment,
+  getParticipantPayments
+} = require('./db-helpers');
 const { uploadReceiptToTabScanner, getReceiptResult, parseLineItemsToCheckItems } = require('./tabscanner-service');
 const prisma = require('./prisma-client');
 const { broadcastToSession } = require('./websocket-server');
@@ -488,6 +500,141 @@ app.delete('/api/items/:itemId/unselect', async (req, res) => {
       error: 'Failed to remove selection',
       message: error.message
     });
+  }
+});
+
+// Подтвердить выбор позиций
+app.post('/api/sessions/:sessionId/confirm-selection', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { participantId } = req.body;
+
+    if (!participantId) {
+      return res.status(400).json({ error: 'participantId is required' });
+    }
+
+    const result = await confirmParticipantSelection(sessionId, participantId);
+
+    // Получаем обновленную сессию
+    const session = await getSessionWithItems(sessionId);
+    const legacySession = sessionToLegacyFormat(session);
+
+    // Отправляем WebSocket уведомление
+    broadcastToSession(sessionId, {
+      type: 'selection_confirmed',
+      data: {
+        participantId,
+        participants: legacySession.participants
+      }
+    });
+
+    res.json({ success: true, result });
+  } catch (error) {
+    console.error('Error confirming selection:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Отменить подтверждение выбора (разрешить редактирование)
+app.post('/api/sessions/:sessionId/unconfirm-selection', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { participantId } = req.body;
+
+    if (!participantId) {
+      return res.status(400).json({ error: 'participantId is required' });
+    }
+
+    const result = await unconfirmParticipantSelection(sessionId, participantId);
+
+    // Получаем обновленную сессию
+    const session = await getSessionWithItems(sessionId);
+    const legacySession = sessionToLegacyFormat(session);
+
+    // Отправляем WebSocket уведомление
+    broadcastToSession(sessionId, {
+      type: 'selection_confirmed',
+      data: {
+        participantId,
+        participants: legacySession.participants
+      }
+    });
+
+    res.json({ success: true, result });
+  } catch (error) {
+    console.error('Error unconfirming selection:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Создать платеж
+app.post('/api/sessions/:sessionId/payments', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { participantId, amount, paymentProof } = req.body;
+
+    if (!participantId || !amount) {
+      return res.status(400).json({ error: 'participantId and amount are required' });
+    }
+
+    const payment = await createPayment(sessionId, participantId, parseFloat(amount), paymentProof);
+
+    res.json({ success: true, payment });
+  } catch (error) {
+    console.error('Error creating payment:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Обновить платеж (добавить скриншот)
+app.patch('/api/payments/:paymentId', async (req, res) => {
+  try {
+    const { paymentId } = req.params;
+    const { paymentProof } = req.body;
+
+    if (!paymentProof) {
+      return res.status(400).json({ error: 'paymentProof is required' });
+    }
+
+    const payment = await updatePayment(paymentId, paymentProof);
+
+    res.json({ success: true, payment });
+  } catch (error) {
+    console.error('Error updating payment:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Получить платежи участника
+app.get('/api/sessions/:sessionId/payments/:participantId', async (req, res) => {
+  try {
+    const { sessionId, participantId } = req.params;
+
+    const payments = await getParticipantPayments(sessionId, participantId);
+
+    res.json({ success: true, payments });
+  } catch (error) {
+    console.error('Error getting payments:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Загрузка скриншота платежа
+app.post('/api/upload-payment-proof', upload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    const fileUrl = `/uploads/${req.file.filename}`;
+
+    res.json({
+      success: true,
+      url: fileUrl
+    });
+  } catch (error) {
+    console.error('Error uploading payment proof:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 

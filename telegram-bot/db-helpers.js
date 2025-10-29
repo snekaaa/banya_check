@@ -353,7 +353,9 @@ function sessionToLegacyFormat(session) {
       lastName: sp.participant.lastName,
       avatar: sp.participant.avatar,
       color: sp.participant.color,
-      role: sp.role
+      role: sp.role,
+      selectionConfirmed: sp.selectionConfirmed,
+      hasPayment: sp.hasPayment
     })),
     items: (session.items || []).map(item => ({
       id: item.id,
@@ -372,6 +374,168 @@ function sessionToLegacyFormat(session) {
   };
 }
 
+/**
+ * Подтвердить выбор позиций участником
+ * @param {string} sessionId - ID сессии
+ * @param {string|number} telegramId - Telegram ID пользователя
+ */
+async function confirmParticipantSelection(sessionId, telegramId) {
+  // Находим участника по telegramId
+  const participant = await prisma.participant.findUnique({
+    where: { telegramId: BigInt(telegramId) }
+  });
+
+  if (!participant) {
+    throw new Error('Participant not found');
+  }
+
+  // Находим связь участника с сессией
+  const sessionParticipant = await prisma.sessionParticipant.findUnique({
+    where: {
+      sessionId_participantId: {
+        sessionId,
+        participantId: participant.id
+      }
+    }
+  });
+
+  if (!sessionParticipant) {
+    throw new Error('Participant not found in session');
+  }
+
+  return await prisma.sessionParticipant.update({
+    where: { id: sessionParticipant.id },
+    data: { selectionConfirmed: true }
+  });
+}
+
+/**
+ * Отменить подтверждение выбора (разрешить редактирование)
+ * @param {string} sessionId - ID сессии
+ * @param {string|number} telegramId - Telegram ID пользователя
+ */
+async function unconfirmParticipantSelection(sessionId, telegramId) {
+  // Находим участника по telegramId
+  const participant = await prisma.participant.findUnique({
+    where: { telegramId: BigInt(telegramId) }
+  });
+
+  if (!participant) {
+    throw new Error('Participant not found');
+  }
+
+  // Находим связь участника с сессией
+  const sessionParticipant = await prisma.sessionParticipant.findUnique({
+    where: {
+      sessionId_participantId: {
+        sessionId,
+        participantId: participant.id
+      }
+    }
+  });
+
+  if (!sessionParticipant) {
+    throw new Error('Participant not found in session');
+  }
+
+  return await prisma.sessionParticipant.update({
+    where: { id: sessionParticipant.id },
+    data: { selectionConfirmed: false }
+  });
+}
+
+/**
+ * Создать платеж
+ * @param {string} sessionId - ID сессии
+ * @param {string|number} telegramId - Telegram ID пользователя
+ * @param {number} amount - Сумма платежа
+ * @param {string|null} paymentProof - URL скриншота
+ */
+async function createPayment(sessionId, telegramId, amount, paymentProof = null) {
+  // Находим участника по telegramId
+  const participant = await prisma.participant.findUnique({
+    where: { telegramId: BigInt(telegramId) }
+  });
+
+  if (!participant) {
+    throw new Error('Participant not found');
+  }
+
+  // Находим связь участника с сессией
+  const sessionParticipant = await prisma.sessionParticipant.findUnique({
+    where: {
+      sessionId_participantId: {
+        sessionId,
+        participantId: participant.id
+      }
+    }
+  });
+
+  if (!sessionParticipant) {
+    throw new Error('Participant not found in session');
+  }
+
+  const payment = await prisma.payment.create({
+    data: {
+      sessionParticipantId: sessionParticipant.id,
+      amount,
+      paymentProof,
+      confirmedAt: paymentProof ? new Date() : null
+    }
+  });
+
+  // Обновляем флаг hasPayment у участника
+  await prisma.sessionParticipant.update({
+    where: { id: sessionParticipant.id },
+    data: { hasPayment: true }
+  });
+
+  return payment;
+}
+
+/**
+ * Обновить платеж (добавить скриншот)
+ */
+async function updatePayment(paymentId, paymentProof) {
+  return await prisma.payment.update({
+    where: { id: paymentId },
+    data: {
+      paymentProof,
+      confirmedAt: new Date()
+    }
+  });
+}
+
+/**
+ * Получить платежи участника в сессии
+ * @param {string} sessionId - ID сессии
+ * @param {string|number} telegramId - Telegram ID пользователя
+ */
+async function getParticipantPayments(sessionId, telegramId) {
+  // Находим участника по telegramId
+  const participant = await prisma.participant.findUnique({
+    where: { telegramId: BigInt(telegramId) }
+  });
+
+  if (!participant) {
+    return [];
+  }
+
+  const sessionParticipant = await prisma.sessionParticipant.findUnique({
+    where: {
+      sessionId_participantId: {
+        sessionId,
+        participantId: participant.id
+      }
+    },
+    include: {
+      payments: true
+    }
+  });
+
+  return sessionParticipant?.payments || [];
+}
+
 module.exports = {
   getOrCreateParticipant,
   createSession,
@@ -385,5 +549,10 @@ module.exports = {
   deleteItemSelection,
   getItemSelections,
   getSessionWithItems,
-  sessionToLegacyFormat
+  sessionToLegacyFormat,
+  confirmParticipantSelection,
+  unconfirmParticipantSelection,
+  createPayment,
+  updatePayment,
+  getParticipantPayments
 };

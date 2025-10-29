@@ -4,13 +4,18 @@ import { useEffect, useState, useMemo, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useTelegramWebApp } from '../hooks/useTelegramWebApp';
 import { useSessionPresence } from '../hooks/useSessionPresence';
+import ParticipantsStatus from '../components/ParticipantsStatus';
 
 // Types
 interface Participant {
   id: number;
   name: string;
+  username?: string;
+  firstName?: string;
   avatar: string;
   color: string;
+  selectionConfirmed?: boolean;
+  hasPayment?: boolean;
   isOnline?: boolean;
   onlineColor?: string;
 }
@@ -56,6 +61,8 @@ function HomeContent() {
   const [loading, setLoading] = useState(true);
   const [selectedItems, setSelectedItems] = useState<Map<string, number>>(new Map());
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
+  const [isConfirmed, setIsConfirmed] = useState(false);
+  const [isConfirming, setIsConfirming] = useState(false);
 
   // Функция для перезагрузки данных сессии
   const reloadSessionData = useCallback(async () => {
@@ -82,6 +89,7 @@ function HomeContent() {
     userColor: null,
     onExpensesUpdated: reloadSessionData,
     onItemSelectionUpdated: reloadSessionData,
+    onSelectionConfirmed: reloadSessionData,
   });
 
   // Отладочное логирование (можно убрать в продакшене)
@@ -285,13 +293,95 @@ function HomeContent() {
     }
   }, [selectedItems, user, handleItemToggle, reloadSessionData]);
 
-  // Рассчитываем суммы
-  const { totalAmount, userAmount } = useMemo(() => {
-    if (!sessionData) return { totalAmount: 0, userAmount: 0 };
+  // Проверяем, подтвердил ли текущий пользователь выбор
+  useEffect(() => {
+    if (!sessionData || !user) return;
+
+    const currentParticipant = sessionData.participants.find(p => p.id === user.id);
+    setIsConfirmed(currentParticipant?.selectionConfirmed || false);
+  }, [sessionData, user]);
+
+  // Функция подтверждения выбора
+  const handleConfirmSelection = useCallback(async () => {
+    if (!sessionId || !user?.id || isConfirming) {
+      console.log('Cannot confirm:', { sessionId, userId: user?.id, isConfirming });
+      return;
+    }
+
+    console.log('Starting confirmation for user:', user.id);
+    setIsConfirming(true);
+    try {
+      // Находим participantId по telegramId
+      const participant = sessionData?.participants.find(p => p.id === user.id);
+      if (!participant) {
+        throw new Error('Participant not found');
+      }
+
+      const response = await fetch(`http://localhost:3002/api/sessions/${sessionId}/confirm-selection`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ participantId: String(user.id) })
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Confirmation failed:', response.status, errorText);
+        throw new Error(`Failed to confirm selection: ${errorText}`);
+      }
+
+      const result = await response.json();
+      console.log('Confirmation successful:', result);
+
+      // Сначала обновляем данные, затем состояние
+      await reloadSessionData();
+      setIsConfirmed(true);
+      console.log('State updated, isConfirmed=true');
+    } catch (error) {
+      console.error('Error confirming selection:', error);
+      alert(`Ошибка подтверждения: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setIsConfirming(false);
+    }
+  }, [sessionId, user, sessionData, isConfirming, reloadSessionData]);
+
+  // Функция отмены подтверждения (разрешить редактирование)
+  const handleUnconfirmSelection = useCallback(async () => {
+    if (!sessionId || !user?.id || isConfirming) return;
+
+    setIsConfirming(true);
+    try {
+      const response = await fetch(`http://localhost:3002/api/sessions/${sessionId}/unconfirm-selection`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ participantId: String(user.id) })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to unconfirm selection');
+      }
+
+      setIsConfirmed(false);
+      await reloadSessionData();
+    } catch (error) {
+      console.error('Error unconfirming selection:', error);
+    } finally {
+      setIsConfirming(false);
+    }
+  }, [sessionId, user, isConfirming, reloadSessionData]);
+
+  // Рассчитываем суммы для всех участников
+  const { totalAmount, userAmount, participantAmounts } = useMemo(() => {
+    if (!sessionData) return { totalAmount: 0, userAmount: 0, participantAmounts: new Map<number, number>() };
 
     let total = 0;
     let userSum = 0;
     const participantsCount = sessionData.participants.length || 1;
+    const amounts = new Map<number, number>();
+
+    // Инициализируем суммы для всех участников
+    sessionData.participants.forEach(p => {
+      amounts.set(p.id, 0);
+    });
 
     sessionData.items.forEach(item => {
       const itemTotal = item.price * item.quantity;
@@ -299,9 +389,20 @@ function HomeContent() {
 
       if (item.isCommon) {
         // Общие позиции делятся поровну на всех
-        userSum += itemTotal / participantsCount;
+        const sharePerPerson = itemTotal / participantsCount;
+        sessionData.participants.forEach(p => {
+          amounts.set(p.id, (amounts.get(p.id) || 0) + sharePerPerson);
+        });
+        if (user) {
+          userSum += sharePerPerson;
+        }
       } else {
         // Частичные позиции - берем только то, что выбрали
+        item.selectedBy.forEach(share => {
+          const shareTotal = item.price * share.quantity;
+          amounts.set(share.userId, (amounts.get(share.userId) || 0) + shareTotal);
+        });
+
         const selectedQuantity = selectedItems.get(item.id) || 0;
         if (selectedQuantity > 0) {
           userSum += item.price * selectedQuantity;
@@ -312,29 +413,54 @@ function HomeContent() {
     return {
       totalAmount: Math.round(total),
       userAmount: Math.round(userSum),
+      participantAmounts: amounts,
     };
-  }, [sessionData, selectedItems]);
+  }, [sessionData, selectedItems, user]);
 
   // Настраиваем MainButton
   useEffect(() => {
     if (!webApp || !isReady) return;
 
-    webApp.MainButton.setText('Подтвердить выбор');
-    webApp.MainButton.show();
+    console.log('MainButton update:', { isConfirmed, isConfirming, userAmount });
 
-    const handleClick = () => {
-      if (sessionId) {
-        router.push(`/payment?sessionId=${sessionId}`);
-      }
-    };
+    if (isConfirmed) {
+      // Если выбор подтвержден, показываем кнопку перехода к оплате
+      console.log('Setting MainButton to payment mode');
+      webApp.MainButton.setText('Перейти к оплате');
+      webApp.MainButton.show();
 
-    webApp.MainButton.onClick(handleClick);
+      const handleClick = () => {
+        console.log('Payment button clicked, navigating...');
+        if (sessionId) {
+          router.push(`/payment?sessionId=${sessionId}&amount=${userAmount}`);
+        }
+      };
 
-    return () => {
-      webApp.MainButton.offClick(handleClick);
-      webApp.MainButton.hide();
-    };
-  }, [webApp, isReady, sessionId, router]);
+      webApp.MainButton.onClick(handleClick);
+
+      return () => {
+        webApp.MainButton.offClick(handleClick);
+        webApp.MainButton.hide();
+      };
+    } else {
+      // Если выбор не подтвержден, показываем кнопку подтверждения
+      console.log('Setting MainButton to confirmation mode');
+      webApp.MainButton.setText(isConfirming ? 'Подтверждение...' : 'Подтвердить выбор');
+      webApp.MainButton.show();
+
+      const handleClick = () => {
+        console.log('Confirm button clicked');
+        handleConfirmSelection();
+      };
+
+      webApp.MainButton.onClick(handleClick);
+
+      return () => {
+        webApp.MainButton.offClick(handleClick);
+        webApp.MainButton.hide();
+      };
+    }
+  }, [webApp, isReady, sessionId, router, isConfirmed, isConfirming, userAmount, handleConfirmSelection]);
 
   // Генерация рандомного яркого цвета для пользователя
   const getUserColor = (userId: number) => {
@@ -430,46 +556,93 @@ function HomeContent() {
             </div>
           </div>
         </div>
-
-        {/* Участники */}
-        <div className="px-4 pb-3 pt-2 overflow-x-auto">
-          <div className="flex gap-4">
-            {participantsWithStatus.map(participant => (
-              <div key={participant.id} className="flex flex-col items-center gap-1 min-w-[60px]">
-                <div className="relative">
-                  <div
-                    className="w-12 h-12 rounded-full flex items-center justify-center text-white font-semibold text-sm"
-                    style={{
-                      backgroundColor: participant.color || '#3390ec',
-                      ...(participant.isOnline && participant.onlineColor ? {
-                        boxShadow: `0 0 0 2px #ffffff, 0 0 0 4px ${participant.onlineColor}`,
-                      } : {})
-                    }}
-                  >
-                    {participant.avatar ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={participant.avatar}
-                        alt={participant.name}
-                        className="w-full h-full rounded-full object-cover"
-                      />
-                    ) : (
-                      participant.name.charAt(0).toUpperCase()
-                    )}
-                  </div>
-                </div>
-                <div className="text-xs text-[var(--tg-theme-text-color,#000000)] text-center truncate max-w-[60px]">
-                  {participant.name}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
       </div>
 
-      {/* Список позиций */}
-      <div className="px-4 py-4 space-y-3">
-        {sessionData.items.map(item => {
+      {/* Статус участников */}
+      <div className="px-4 pt-4">
+        <ParticipantsStatus
+          participants={participantsWithStatus.map(p => ({
+            id: String(p.id),
+            telegramId: String(p.id),
+            username: p.username || undefined,
+            firstName: p.firstName || p.name,
+            avatar: p.avatar,
+            color: p.color,
+            selectionConfirmed: p.selectionConfirmed || false,
+            hasPayment: p.hasPayment || false,
+            isOnline: p.isOnline,
+            amount: participantAmounts.get(p.id) || 0
+          }))}
+          onlineUsers={new Set(onlineUsers.map(u => String(u.userId)))}
+        />
+      </div>
+
+      {/* Подтверждение/редактирование */}
+      {isConfirmed && (
+        <div className="px-4 pb-2">
+          <div className="bg-green-50 border border-green-200 rounded-xl p-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <svg className="w-5 h-5 text-green-600" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                </svg>
+                <span className="text-sm font-medium text-green-800">Ваш выбор подтвержден</span>
+              </div>
+              <button
+                onClick={handleUnconfirmSelection}
+                className="text-xs text-green-700 underline"
+              >
+                Изменить
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Общие расходы */}
+      {sessionData.items.filter(item => item.isCommon).length > 0 && (
+        <div className="px-4 py-3">
+          <h3 className="text-sm font-semibold text-[var(--tg-theme-text-color,#000000)] mb-3">Общие расходы</h3>
+          <div className="space-y-2">
+            {sessionData.items.filter(item => item.isCommon).map(item => {
+              const itemTotal = item.price * item.quantity;
+              const participantsCount = sessionData.participants.length || 1;
+              const userShare = itemTotal / participantsCount;
+
+              return (
+                <div
+                  key={item.id}
+                  className="rounded-2xl p-4 bg-[var(--tg-theme-secondary-bg-color,#f5f5f5)]"
+                >
+                  <div className="flex justify-between items-start">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2">
+                        <div className="font-medium text-[var(--tg-theme-text-color,#000000)]">{item.name}</div>
+                        <span className="text-xs px-2 py-0.5 bg-[var(--tg-theme-button-color,#3390ec)]/10 text-[var(--tg-theme-button-color,#3390ec)] rounded-full">общее</span>
+                      </div>
+                      <div className="text-sm text-[var(--tg-theme-hint-color,#999999)] mt-1">
+                        Ваша доля: {Math.round(userShare)} ₽
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="font-semibold text-[var(--tg-theme-text-color,#000000)]">
+                        {Math.round(itemTotal)} ₽
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Выберите свои позиции */}
+      {sessionData.items.filter(item => !item.isCommon).length > 0 && (
+        <div className="px-4 py-3">
+          <h3 className="text-sm font-semibold text-[var(--tg-theme-text-color,#000000)] mb-3">Выберите свои позиции</h3>
+          <div className="space-y-3">
+            {sessionData.items.filter(item => !item.isCommon).map(item => {
           const isSelected = selectedItems.has(item.id);
           const selectedQuantity = selectedItems.get(item.id) || 1;
           const totalSelected = item.selectedBy.reduce((sum, share) => sum + share.quantity, 0);
@@ -634,10 +807,12 @@ function HomeContent() {
                   )}
                 </div>
               </div>
-            </div>
-          );
-        })}
-      </div>
+              </div>
+            );
+          })}
+          </div>
+        </div>
+      )}
 
       {/* Кнопки действий */}
       <div className="px-4 py-4 flex gap-3">

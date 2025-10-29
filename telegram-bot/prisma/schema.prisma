@@ -49,15 +49,17 @@ model Session {
 
 // Связь участников и походов (многие-ко-многим)
 model SessionParticipant {
-  id            String   @id @default(cuid())
-  sessionId     String
-  participantId String
-  role          String   @default("member") // admin, member
-  hasPayment    Boolean  @default(false)
-  createdAt     DateTime @default(now())
+  id                  String   @id @default(cuid())
+  sessionId           String
+  participantId       String
+  role                String   @default("member") // admin, member
+  hasPayment          Boolean  @default(false)
+  selectionConfirmed  Boolean  @default(false)
+  createdAt           DateTime @default(now())
 
   session       Session     @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   participant   Participant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  payments      Payment[]
 
   @@unique([sessionId, participantId])
 }
@@ -107,4 +109,17 @@ model ItemSelection {
   participant   Participant  @relation(fields: [participantId], references: [id], onDelete: Cascade)
 
   @@unique([checkItemId, participantId])
+}
+
+// Платеж участника
+model Payment {
+  id                    String   @id @default(cuid())
+  sessionParticipantId  String
+  amount                Float
+  paymentProof          String?  // URL скриншота перевода
+  confirmedAt           DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  sessionParticipant    SessionParticipant @relation(fields: [sessionParticipantId], references: [id], onDelete: Cascade)
 }

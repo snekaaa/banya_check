@@ -17,6 +17,7 @@ interface UseSessionPresenceProps {
   userColor: string | null;
   onExpensesUpdated?: () => void;
   onItemSelectionUpdated?: () => void;
+  onSelectionConfirmed?: () => void;
 }
 
 type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
@@ -29,6 +30,7 @@ export function useSessionPresence({
   userColor,
   onExpensesUpdated,
   onItemSelectionUpdated,
+  onSelectionConfirmed,
 }: UseSessionPresenceProps) {
   const [onlineUsers, setOnlineUsers] = useState<OnlineUser[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
@@ -194,6 +196,13 @@ export function useSessionPresence({
               // Выбор позиции обновился - перезагружаем данные
               if (onItemSelectionUpdated) {
                 onItemSelectionUpdated();
+              }
+              break;
+
+            case 'selection_confirmed':
+              // Подтверждение выбора обновилось - перезагружаем данные
+              if (onSelectionConfirmed) {
+                onSelectionConfirmed();
               }
               break;
 
