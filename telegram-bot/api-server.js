@@ -6,6 +6,7 @@ const fs = require('fs');
 const { getSession, getSessionsForUser, sessionToLegacyFormat } = require('./db-helpers');
 const { uploadReceiptToTabScanner, getReceiptResult, parseLineItemsToCheckItems } = require('./tabscanner-service');
 const prisma = require('./prisma-client');
+const { broadcastToSession } = require('./websocket-server');
 
 const PORT = 3002;
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
@@ -342,6 +343,12 @@ app.post('/api/sessions/:sessionId/expenses', async (req, res) => {
         quantity: 1,
         isCommon: Boolean(isCommon),
       }
+    });
+
+    // Отправляем уведомление всем подключенным к сессии
+    broadcastToSession(sessionId, {
+      type: 'expenses_updated',
+      sessionId: sessionId,
     });
 
     res.json({

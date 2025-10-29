@@ -19,6 +19,7 @@ interface ItemShare {
   userId: number;
   userName: string;
   userAvatar: string;
+  userColor?: string;
   quantity: number;
 }
 
@@ -55,6 +56,22 @@ function HomeContent() {
   const [loading, setLoading] = useState(true);
   const [selectedItems, setSelectedItems] = useState<Map<string, number>>(new Map());
 
+  // Функция для перезагрузки данных сессии
+  const reloadSessionData = useCallback(async () => {
+    if (!sessionId) return;
+
+    try {
+      const response = await fetch(`/api/sessions/${sessionId}`);
+      if (!response.ok) {
+        throw new Error('Session not found');
+      }
+      const data = await response.json();
+      setSessionData(data);
+    } catch (error) {
+      console.error('Error reloading session:', error);
+    }
+  }, [sessionId]);
+
   // Подключаемся к WebSocket для отслеживания онлайн пользователей
   const { onlineUsers, connectionStatus } = useSessionPresence({
     sessionId,
@@ -62,6 +79,7 @@ function HomeContent() {
     userName: user?.first_name || null,
     userAvatar: user?.photo_url || null,
     userColor: null,
+    onExpensesUpdated: reloadSessionData,
   });
 
   // Отладочное логирование
@@ -215,8 +233,8 @@ function HomeContent() {
     };
   }, [webApp, isReady, sessionId, router]);
 
-  // Генерация рандомного яркого цвета для онлайн индикатора
-  const getOnlineRingColor = (userId: number) => {
+  // Генерация рандомного яркого цвета для пользователя
+  const getUserColor = (userId: number) => {
     const colors = [
       '#FF6B6B', // красный
       '#4ECDC4', // бирюзовый
@@ -243,7 +261,7 @@ function HomeContent() {
       return {
         ...participant,
         isOnline: !!onlineUser,
-        onlineColor: onlineUser ? getOnlineRingColor(participant.id) : undefined,
+        onlineColor: onlineUser ? getUserColor(participant.id) : undefined,
       };
     });
   }, [sessionData, onlineUsers]);
@@ -467,23 +485,29 @@ function HomeContent() {
                   {/* Аватары выбравших */}
                   {item.selectedBy.length > 0 && (
                     <div className="flex items-center gap-1 flex-wrap">
-                      {item.selectedBy.map((share, idx) => (
-                        <div
-                          key={idx}
-                          className="w-6 h-6 rounded-full flex items-center justify-center text-white text-xs font-semibold bg-[var(--tg-theme-button-color,#3390ec)] ring-2 ring-white"
-                        >
-                          {share.userAvatar ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              src={share.userAvatar}
-                              alt={share.userName}
-                              className="w-full h-full rounded-full object-cover"
-                            />
-                          ) : (
-                            share.userName.charAt(0).toUpperCase()
-                          )}
-                        </div>
-                      ))}
+                      {item.selectedBy.map((share, idx) => {
+                        const userColor = share.userColor || getUserColor(share.userId);
+                        return (
+                          <div
+                            key={idx}
+                            className="w-6 h-6 rounded-full flex items-center justify-center text-white text-xs font-semibold bg-[var(--tg-theme-button-color,#3390ec)]"
+                            style={{
+                              boxShadow: `0 0 0 2px ${userColor}`
+                            }}
+                          >
+                            {share.userAvatar ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={share.userAvatar}
+                                alt={share.userName}
+                                className="w-full h-full rounded-full object-cover"
+                              />
+                            ) : (
+                              share.userName.charAt(0).toUpperCase()
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>

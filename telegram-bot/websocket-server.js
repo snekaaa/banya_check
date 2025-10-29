@@ -193,4 +193,7 @@ console.log(`🚀 WebSocket сервер запущен на порту ${WS_POR
 console.log(`⏱️  Timeout для неактивных клиентов: ${PING_TIMEOUT}ms`);
 console.log(`🔍 Проверка неактивных клиентов каждые ${PING_CHECK_INTERVAL}ms`);
 
-module.exports = wss;
+module.exports = {
+  wss,
+  broadcastToSession,
+};

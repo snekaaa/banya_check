@@ -15,6 +15,7 @@ interface UseSessionPresenceProps {
   userName: string | null;
   userAvatar: string | null;
   userColor: string | null;
+  onExpensesUpdated?: () => void;
 }
 
 type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
@@ -25,6 +26,7 @@ export function useSessionPresence({
   userName,
   userAvatar,
   userColor,
+  onExpensesUpdated,
 }: UseSessionPresenceProps) {
   const [onlineUsers, setOnlineUsers] = useState<OnlineUser[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
@@ -179,6 +181,13 @@ export function useSessionPresence({
               // Ответ на ping - соединение живо
               break;
 
+            case 'expenses_updated':
+              // Расходы обновились - перезагружаем данные
+              if (onExpensesUpdated) {
+                onExpensesUpdated();
+              }
+              break;
+
             default:
               // Игнорируем неизвестные типы сообщений
               break;
@@ -218,7 +227,7 @@ export function useSessionPresence({
       setConnectionStatus('disconnected');
       scheduleReconnect();
     }
-  }, [sessionId, userId, userName, userAvatar, userColor, startPingInterval, scheduleReconnect]);
+  }, [sessionId, userId, userName, userAvatar, userColor, onExpensesUpdated, startPingInterval, scheduleReconnect]);
 
   // Подключаемся при монтировании и при изменении данных
   useEffect(() => {
