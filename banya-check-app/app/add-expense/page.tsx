@@ -1,9 +1,9 @@
 'use client';
 
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 
-export default function AddExpense() {
+function AddExpenseContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const sessionId = searchParams.get('sessionId');
@@ -237,5 +237,20 @@ export default function AddExpense() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function AddExpense() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center bg-[var(--tg-theme-bg-color,#ffffff)]">
+        <div className="text-center">
+          <div className="text-4xl mb-4">⏳</div>
+          <div className="text-[var(--tg-theme-text-color,#000000)]">Загрузка...</div>
+        </div>
+      </div>
+    }>
+      <AddExpenseContent />
+    </Suspense>
   );
 }

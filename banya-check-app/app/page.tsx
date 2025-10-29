@@ -49,7 +49,8 @@ function HomeContent() {
   const { webApp, user, startParam, isReady } = useTelegramWebApp();
 
   // Приоритет: 1) sessionId из URL, 2) tgWebAppStartParam из URL, 3) startParam из Telegram SDK, 4) null
-  const sessionId = sessionIdFromUrl || tgWebAppStartParam || startParam;
+  const sessionIdFromParams = sessionIdFromUrl || tgWebAppStartParam || startParam;
+  const [sessionId, setSessionId] = useState<string | null>(sessionIdFromParams);
   const [sessionData, setSessionData] = useState<SessionData | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedItems, setSelectedItems] = useState<Map<string, number>>(new Map());
@@ -74,15 +75,16 @@ function HomeContent() {
     console.log('[HomePage] sessionIdFromUrl:', sessionIdFromUrl);
     console.log('[HomePage] tgWebAppStartParam:', tgWebAppStartParam);
     console.log('[HomePage] startParam from SDK:', startParam);
-    console.log('[HomePage] final sessionId:', sessionId);
+    console.log('[HomePage] sessionIdFromParams:', sessionIdFromParams);
+    console.log('[HomePage] current sessionId state:', sessionId);
 
     const fetchSession = async () => {
       try {
         let url: string;
 
-        if (sessionId) {
+        if (sessionIdFromParams) {
           // Если sessionId указан в URL, загружаем конкретную сессию
-          url = `/api/sessions/${sessionId}`;
+          url = `/api/sessions/${sessionIdFromParams}`;
         } else if (user?.id) {
           // Если sessionId не указан, загружаем сессии пользователя
           const userSessionsResponse = await fetch(`/api/sessions/user/${user.id}`);
@@ -102,6 +104,8 @@ function HomeContent() {
             return dateB - dateA;
           });
           const latestSession = sortedSessions[0];
+          // Устанавливаем sessionId для использования в компоненте
+          setSessionId(latestSession.id);
           url = `/api/sessions/${latestSession.id}`;
         } else {
           // Если нет ни sessionId, ни user - ждем
@@ -123,11 +127,11 @@ function HomeContent() {
     };
 
     // Запускаем загрузку только когда есть sessionId или когда user готов
-    if (sessionId || user) {
+    if (sessionIdFromParams || user) {
       fetchSession();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, user, router]);
+  }, [sessionIdFromParams, user, router]);
 
   // Обрабатываем выбор/снятие выбора позиции
   const handleItemToggle = useCallback((itemId: string) => {
