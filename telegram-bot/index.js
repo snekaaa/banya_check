@@ -12,10 +12,14 @@ const {
 } = require('./db-helpers');
 const { parseSessionMessage, formatParsedSession } = require('./openai-service');
 const prisma = require('./prisma-client');
-require('./api-server'); // Запускаем API сервер
-require('./websocket-server'); // Запускаем WebSocket сервер
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
+
+// Запускаем API и WebSocket серверы ПОСЛЕ создания бота
+setImmediate(() => {
+  require('./api-server'); // Запускаем API сервер
+  require('./websocket-server'); // Запускаем WebSocket сервер
+});
 
 // Состояния для FSM
 const userStates = new Map();
@@ -225,11 +229,12 @@ bot.command('newbanya', async (ctx) => {
     const participantNames = session.participants.map(p => p.firstName || p.username).join(', ');
 
     const keyboard = Markup.inlineKeyboard([
+      [Markup.button.url('🚀 Открыть БаняСчет', `https://t.me/banya_schet_bot/banya_check?startapp=${session.id}`)],
       [Markup.button.callback('➕ Создать новый поход', 'create_new_session')]
     ]);
 
     return await ctx.reply(
-      `ℹ️ Есть активный поход:\n\n🏛 ${session.venueName || 'Без названия'}\n📅 ${session.date || 'Дата не указана'} в ${session.time || '--:--'}\n👥 Участники: ${participantNames || 'не выбраны'}\n\n💡 Откройте меню (≡) чтобы запустить БаняСчет`,
+      `ℹ️ Есть активный поход:\n\n🏛 ${session.venueName || 'Без названия'}\n📅 ${session.date || 'Дата не указана'} в ${session.time || '--:--'}\n👥 Участники: ${participantNames || 'не выбраны'}`,
       keyboard
     );
   }
@@ -674,10 +679,15 @@ bot.action(/finish_selection_(.+)/, async (ctx) => {
 
     const participantNames = sessionData.participants.map(p => p.firstName || p.username).join(', ');
 
+    const keyboard = Markup.inlineKeyboard([
+      [Markup.button.url('🚀 Открыть БаняСчет', `https://t.me/banya_schet_bot/banya_check?startapp=${sessionId}`)]
+    ]);
+
     // Создаём сообщение с инструкцией
     // Для каждого участника последняя активная сессия будет загружена автоматически
     await ctx.reply(
-      `✅ Поход создан!\n\n🏛 ${sessionData.venueName}\n📅 ${sessionData.date} в ${sessionData.time}\n👥 Участники (${sessionData.participants.length}): ${participantNames}\n\n💡 Откройте БаняСчет:\n🔗 ${WEB_APP_URL}\n\nИли используйте кнопку меню (≡) в правом нижнем углу чата.`
+      `✅ Поход создан!\n\n🏛 ${sessionData.venueName}\n📅 ${sessionData.date} в ${sessionData.time}\n👥 Участники (${sessionData.participants.length}): ${participantNames}\n\nСледующие шаги:\n\n1️⃣ Добавьте общие расходы\n   (аренда бани, веники, напитки)\n\n2️⃣ Загрузите чеки\n   (бот распознает позиции автоматически)\n\n3️⃣ Каждый выбирает свои позиции\n   (в режиме реального времени)`,
+      keyboard
     );
 
     await ctx.answerCbQuery('✅ Участники сохранены!');
@@ -727,11 +737,10 @@ bot.catch((err, ctx) => {
 });
 
 // Запуск бота
-bot.launch().then(async () => {
-  console.log('🤖 Бот запущен!');
-  console.log('Используйте Ctrl+C для остановки');
+console.log('🔄 Запускаем бота...');
 
-  // Устанавливаем кнопку меню с Web App
+// Устанавливаем кнопку меню и запускаем бота
+(async () => {
   try {
     await bot.telegram.setChatMenuButton({
       menuButton: {
@@ -745,6 +754,14 @@ bot.launch().then(async () => {
   } catch (error) {
     console.error('❌ Ошибка установки кнопки меню:', error);
   }
+
+  // Запускаем бота (не ждем завершения, т.к. это long polling)
+  bot.launch();
+  console.log('🤖 Бот запущен в режиме long polling!');
+  console.log('Используйте Ctrl+C для остановки');
+})().catch((error) => {
+  console.error('❌ Ошибка:', error);
+  process.exit(1);
 });
 
 // Graceful stop
