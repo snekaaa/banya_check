@@ -2,7 +2,6 @@
 
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useState, useEffect, Suspense } from 'react';
-import ImageUpload from '../../components/ImageUpload';
 import { useTelegramWebApp } from '../../hooks/useTelegramWebApp';
 
 interface SessionData {
@@ -23,11 +22,9 @@ function PaymentContent() {
   const amount = searchParams.get('amount') || '0';
   const { user } = useTelegramWebApp();
 
-  const [copied, setCopied] = useState<string | null>(null);
   const [sessionData, setSessionData] = useState<SessionData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [paymentProofUrl, setPaymentProofUrl] = useState<string | null>(null);
-  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Загружаем данные сессии для получения информации о казначее
@@ -58,36 +55,22 @@ function PaymentContent() {
   );
   const treasurerName = treasurer?.firstName || treasurer?.name || 'Администратор';
 
-  const copyToClipboard = (text: string, type: string) => {
-    navigator.clipboard.writeText(text);
-    setCopied(type);
-    setTimeout(() => setCopied(null), 2000);
-  };
-
-  const handleUploadComplete = (url: string) => {
-    setPaymentProofUrl(url);
-    setUploadError(null);
-  };
-
-  const handleUploadError = (error: string) => {
-    setUploadError(error);
-  };
-
   const handlePaymentConfirm = async () => {
-    if (!paymentProofUrl || !sessionId || !user?.id) {
-      setUploadError('Пожалуйста, загрузите скриншот перевода');
+    if (!sessionId || !user?.id) {
+      setError('Ошибка: отсутствуют данные сессии или пользователя');
       return;
     }
 
     setIsSubmitting(true);
+    setError(null);
+
     try {
-      const response = await fetch(`http://localhost:3002/api/sessions/${sessionId}/payments`, {
+      const response = await fetch(`/api/sessions/${sessionId}/payments`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           participantId: String(user.id),
-          amount: parseFloat(amount),
-          paymentProof: paymentProofUrl
+          amount: parseFloat(amount)
         })
       });
 
@@ -97,9 +80,9 @@ function PaymentContent() {
 
       // Переход на страницу отзывов
       router.push(`/review?sessionId=${sessionId}`);
-    } catch (error) {
-      console.error('Error confirming payment:', error);
-      setUploadError('Ошибка при подтверждении оплаты. Попробуйте снова.');
+    } catch (err) {
+      console.error('Error confirming payment:', err);
+      setError('Ошибка при подтверждении оплаты. Попробуйте снова.');
     } finally {
       setIsSubmitting(false);
     }
@@ -177,21 +160,12 @@ function PaymentContent() {
             </div>
           </div>
 
-          {/* Payment proof upload */}
-          <div className="mb-4">
-            <h3 className="text-sm font-semibold text-[var(--tg-theme-text-color,#000000)] mb-3">
-              Загрузите скриншот перевода
-            </h3>
-            <ImageUpload
-              onUploadComplete={handleUploadComplete}
-              onUploadError={handleUploadError}
-            />
-            {uploadError && (
-              <div className="mt-2 text-xs text-red-600">
-                {uploadError}
-              </div>
-            )}
-          </div>
+          {/* Error message */}
+          {error && (
+            <div className="bg-red-100 text-red-700 p-4 rounded-xl text-sm mb-4">
+              {error}
+            </div>
+          )}
         </div>
 
         {/* Bottom button */}
@@ -199,7 +173,7 @@ function PaymentContent() {
           <div className="max-w-[420px] mx-auto">
             <button
               onClick={handlePaymentConfirm}
-              disabled={!paymentProofUrl || isSubmitting}
+              disabled={isSubmitting}
               className="w-full bg-[var(--tg-theme-button-color,#3390ec)] text-[var(--tg-theme-button-text-color,#ffffff)]
                          font-semibold py-4 rounded-xl transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
             >

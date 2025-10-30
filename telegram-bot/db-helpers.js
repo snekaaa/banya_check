@@ -494,7 +494,7 @@ async function createPayment(sessionId, telegramId, amount, paymentProof = null)
       sessionParticipantId: sessionParticipant.id,
       amount,
       paymentProof,
-      confirmedAt: paymentProof ? new Date() : null
+      confirmedAt: new Date() // Подтверждаем сразу при нажатии "Я оплатил"
     }
   });
 

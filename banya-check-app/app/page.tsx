@@ -372,7 +372,7 @@ function HomeContent() {
         throw new Error('Participant not found');
       }
 
-      const response = await fetch(`http://localhost:3002/api/sessions/${sessionId}/confirm-selection`, {
+      const response = await fetch(`/api/sessions/${sessionId}/confirm-selection`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ participantId: String(user.id) })
@@ -405,7 +405,7 @@ function HomeContent() {
 
     setIsConfirming(true);
     try {
-      const response = await fetch(`http://localhost:3002/api/sessions/${sessionId}/unconfirm-selection`, {
+      const response = await fetch(`/api/sessions/${sessionId}/unconfirm-selection`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ participantId: String(user.id) })
