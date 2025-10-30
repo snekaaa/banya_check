@@ -32,15 +32,16 @@ model Participant {
 
 // Поход в баню (сессия)
 model Session {
-  id           String   @id @default(cuid())
-  chatId       BigInt
-  adminId      BigInt
-  venueName    String?
-  date         String?
-  time         String?
-  status       String   @default("draft") // draft, active, closed
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                     String   @id @default(cuid())
+  chatId                 BigInt
+  adminId                BigInt
+  venueName              String?
+  date                   String?
+  time                   String?
+  status                 String   @default("draft") // draft, active, closed
+  registrationMessageId  Int?     // ID сообщения с кнопками регистрации
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
 
   participants SessionParticipant[]
   receipts     Receipt[]
@@ -53,6 +54,7 @@ model SessionParticipant {
   sessionId           String
   participantId       String
   role                String   @default("member") // admin, member
+  attendanceStatus    String   @default("going") // going (точно иду), maybe (думаю), not_going (не иду)
   hasPayment          Boolean  @default(false)
   selectionConfirmed  Boolean  @default(false)
   createdAt           DateTime @default(now())

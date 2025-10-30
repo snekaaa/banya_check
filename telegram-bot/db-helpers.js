@@ -161,7 +161,7 @@ async function updateSession(sessionId, data) {
 /**
  * Добавить участника в сессию
  */
-async function addParticipantToSession(sessionId, participantId, role = 'member') {
+async function addParticipantToSession(sessionId, participantId, role = 'member', attendanceStatus = 'going') {
   const sessionParticipant = await prisma.sessionParticipant.upsert({
     where: {
       sessionId_participantId: {
@@ -172,10 +172,12 @@ async function addParticipantToSession(sessionId, participantId, role = 'member'
     create: {
       sessionId,
       participantId,
-      role
+      role,
+      attendanceStatus
     },
     update: {
-      role
+      role,
+      attendanceStatus
     }
   });
 
@@ -346,6 +348,7 @@ async function getSessionWithItems(sessionId) {
 
 /**
  * Преобразовать сессию из БД в формат для бота (совместимость со старым кодом)
+ * Включает только участников со статусом 'going' (точно идут)
  */
 function sessionToLegacyFormat(session) {
   if (!session) return null;
@@ -359,18 +362,22 @@ function sessionToLegacyFormat(session) {
     time: session.time,
     status: session.status,
     createdAt: session.createdAt,
-    participants: session.participants.map(sp => ({
-      id: Number(sp.participant.telegramId),
-      name: sp.participant.firstName || sp.participant.username || 'Аноним',
-      username: sp.participant.username,
-      firstName: sp.participant.firstName,
-      lastName: sp.participant.lastName,
-      avatar: sp.participant.avatar,
-      color: sp.participant.color,
-      role: sp.role,
-      selectionConfirmed: sp.selectionConfirmed,
-      hasPayment: sp.hasPayment
-    })),
+    // Фильтруем только участников со статусом 'going'
+    participants: session.participants
+      .filter(sp => sp.attendanceStatus === 'going')
+      .map(sp => ({
+        id: Number(sp.participant.telegramId),
+        name: sp.participant.firstName || sp.participant.username || 'Аноним',
+        username: sp.participant.username,
+        firstName: sp.participant.firstName,
+        lastName: sp.participant.lastName,
+        avatar: sp.participant.avatar,
+        color: sp.participant.color,
+        role: sp.role,
+        attendanceStatus: sp.attendanceStatus,
+        selectionConfirmed: sp.selectionConfirmed,
+        hasPayment: sp.hasPayment
+      })),
     items: (session.items || []).map(item => ({
       id: item.id,
       name: item.name,
@@ -550,6 +557,66 @@ async function getParticipantPayments(sessionId, telegramId) {
   return sessionParticipant?.payments || [];
 }
 
+/**
+ * Обновить статус участия пользователя в сессии
+ * @param {string} sessionId - ID сессии
+ * @param {string|number} telegramId - Telegram ID пользователя
+ * @param {string} attendanceStatus - Статус: 'going', 'maybe', 'not_going'
+ */
+async function updateAttendanceStatus(sessionId, telegramId, attendanceStatus) {
+  // Находим участника по telegramId
+  const participant = await prisma.participant.findUnique({
+    where: { telegramId: BigInt(telegramId) }
+  });
+
+  if (!participant) {
+    throw new Error('Participant not found');
+  }
+
+  // Обновляем или создаем запись
+  const sessionParticipant = await prisma.sessionParticipant.upsert({
+    where: {
+      sessionId_participantId: {
+        sessionId,
+        participantId: participant.id
+      }
+    },
+    create: {
+      sessionId,
+      participantId: participant.id,
+      attendanceStatus,
+      role: 'member'
+    },
+    update: {
+      attendanceStatus
+    },
+    include: {
+      participant: true
+    }
+  });
+
+  return sessionParticipant;
+}
+
+/**
+ * Получить участников сессии по статусу
+ * @param {string} sessionId - ID сессии
+ */
+async function getParticipantsByStatus(sessionId) {
+  const participants = await prisma.sessionParticipant.findMany({
+    where: { sessionId },
+    include: {
+      participant: true
+    }
+  });
+
+  return {
+    going: participants.filter(p => p.attendanceStatus === 'going'),
+    maybe: participants.filter(p => p.attendanceStatus === 'maybe'),
+    notGoing: participants.filter(p => p.attendanceStatus === 'not_going')
+  };
+}
+
 module.exports = {
   getOrCreateParticipant,
   createSession,
@@ -568,5 +635,7 @@ module.exports = {
   unconfirmParticipantSelection,
   createPayment,
   updatePayment,
-  getParticipantPayments
+  getParticipantPayments,
+  updateAttendanceStatus,
+  getParticipantsByStatus
 };

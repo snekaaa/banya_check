@@ -8,7 +8,9 @@ const {
   addParticipantToSession,
   removeParticipantFromSession,
   getActiveSessionsForChat,
-  sessionToLegacyFormat
+  sessionToLegacyFormat,
+  updateAttendanceStatus,
+  getParticipantsByStatus
 } = require('./db-helpers');
 const { parseSessionMessage, formatParsedSession } = require('./openai-service');
 const prisma = require('./prisma-client');
@@ -29,6 +31,57 @@ const chatMembers = new Map();
 
 // Web App URL (из .env)
 const WEB_APP_URL = process.env.WEB_APP_URL;
+
+/**
+ * Форматировать сообщение регистрации участников
+ */
+async function formatRegistrationMessage(sessionId) {
+  const session = await getSession(sessionId);
+  if (!session) return null;
+
+  const participants = await getParticipantsByStatus(sessionId);
+
+  let message = `🏛 ${session.venueName || 'Поход в баню'}\n`;
+  message += `📅 ${session.date || 'Дата не указана'} в ${session.time || '--:--'}\n\n`;
+
+  // Точно идут
+  if (participants.going.length > 0) {
+    message += `🟢 Точно идут (${participants.going.length}):\n`;
+    participants.going.forEach(p => {
+      const name = p.participant.firstName || p.participant.username || 'Аноним';
+      message += `  • ${name}\n`;
+    });
+    message += '\n';
+  }
+
+  // Еще думают
+  if (participants.maybe.length > 0) {
+    message += `🟡 Еще думают (${participants.maybe.length}):\n`;
+    participants.maybe.forEach(p => {
+      const name = p.participant.firstName || p.participant.username || 'Аноним';
+      message += `  • ${name}\n`;
+    });
+    message += '\n';
+  }
+
+  // Не идут
+  if (participants.notGoing.length > 0) {
+    message += `🔴 Не идут (${participants.notGoing.length}):\n`;
+    participants.notGoing.forEach(p => {
+      const name = p.participant.firstName || p.participant.username || 'Аноним';
+      message += `  • ${name}\n`;
+    });
+    message += '\n';
+  }
+
+  if (participants.going.length === 0 && participants.maybe.length === 0 && participants.notGoing.length === 0) {
+    message += '👥 Пока никто не зарегистрировался\n\n';
+  }
+
+  message += '💬 Выберите свой статус:';
+
+  return message;
+}
 
 // Команда /start
 bot.command('start', async (ctx) => {
@@ -225,18 +278,28 @@ bot.command('newbanya', async (ctx) => {
   const activeSessions = await getActiveSessionsForChat(ctx.chat.id);
 
   if (activeSessions.length > 0) {
-    const session = sessionToLegacyFormat(activeSessions[0]);
-    const participantNames = session.participants.map(p => p.firstName || p.username).join(', ');
+    const sessionId = activeSessions[0].id;
+
+    // Используем общую функцию форматирования
+    const message = await formatRegistrationMessage(sessionId);
 
     const keyboard = Markup.inlineKeyboard([
-      [Markup.button.url('🚀 Открыть БаняСчет', `https://t.me/banya_schet_bot/banya_check?startapp=${session.id}`)],
-      [Markup.button.callback('➕ Создать новый поход', 'create_new_session')]
+      [
+        Markup.button.callback('🟢 Точно иду', `status_going_${sessionId}`),
+        Markup.button.callback('🟡 Думаю', `status_maybe_${sessionId}`)
+      ],
+      [
+        Markup.button.callback('🔴 Не иду', `status_not_going_${sessionId}`)
+      ],
+      [
+        Markup.button.url('🚀 Открыть БаняСчет', `https://t.me/banya_schet_bot/banya_check?startapp=${sessionId}`)
+      ],
+      [
+        Markup.button.callback('➕ Создать новый поход', 'create_new_session')
+      ]
     ]);
 
-    return await ctx.reply(
-      `ℹ️ Есть активный поход:\n\n🏛 ${session.venueName || 'Без названия'}\n📅 ${session.date || 'Дата не указана'} в ${session.time || '--:--'}\n👥 Участники: ${participantNames || 'не выбраны'}`,
-      keyboard
-    );
+    return await ctx.reply(message, keyboard);
   }
 
   // Получаем текст после команды
@@ -303,150 +366,55 @@ bot.command('newbanya', async (ctx) => {
   }
 });
 
-// Обработка кнопки выбора участников
-bot.action(/select_participants_(.+)/, async (ctx) => {
-  const sessionId = ctx.match[1];
-  const session = await getSession(sessionId);
-
-  if (!session) {
-    return await ctx.answerCbQuery('❌ Сессия не найдена');
-  }
+// Обработка кнопок выбора статуса
+bot.action(/status_(going|maybe|not_going)_(.+)/, async (ctx) => {
+  const status = ctx.match[1];
+  const sessionId = ctx.match[2];
 
   try {
-    const chatId = Number(session.chatId);
-    const members = chatMembers.get(chatId) || new Map();
-
-    // Создаем кнопки с чекбоксами для каждого участника
-    const memberButtons = [];
-    const membersArray = Array.from(members.values());
-
-    if (membersArray.length === 0) {
-      await ctx.answerCbQuery('❌ Нет сохранённых участников. Напишите что-нибудь в чат, чтобы бот запомнил вас!');
-      return;
+    const session = await getSession(sessionId);
+    if (!session) {
+      return await ctx.answerCbQuery('❌ Сессия не найдена');
     }
 
-    const sessionData = sessionToLegacyFormat(session);
-
-    // По 2 кнопки в ряд
-    for (let i = 0; i < membersArray.length; i += 2) {
-      const row = [];
-
-      for (let j = 0; j < 2 && i + j < membersArray.length; j++) {
-        const member = membersArray[i + j];
-        const isSelected = sessionData.participants.some(p => p.id === member.id);
-        const checkbox = isSelected ? '✅' : '☐';
-        const name = member.firstName || member.username || 'User';
-
-        row.push({
-          text: `${checkbox} ${name}`,
-          callback_data: `toggle_participant_${sessionId}_${member.id}`
-        });
-      }
-
-      memberButtons.push(row);
-    }
-
-    // Добавляем кнопку "Готово"
-    memberButtons.push([
-      { text: '✅ Готово', callback_data: `finish_selection_${sessionId}` }
-    ]);
-
-    await ctx.editMessageText(
-      `👥 Выберите участников:\n\nВыбрано: ${sessionData.participants.length}`,
-      {
-        reply_markup: {
-          inline_keyboard: memberButtons
-        }
-      }
-    );
-
-    await ctx.answerCbQuery();
-  } catch (error) {
-    console.error('Error:', error);
-    await ctx.answerCbQuery('❌ Произошла ошибка');
-  }
-});
-
-// Обработка toggle участника
-bot.action(/toggle_participant_(.+)_(.+)/, async (ctx) => {
-  const sessionId = ctx.match[1];
-  const memberId = parseInt(ctx.match[2]);
-  const session = await getSession(sessionId);
-
-  if (!session) {
-    return await ctx.answerCbQuery('❌ Сессия не найдена');
-  }
-
-  try {
-    const chatId = Number(session.chatId);
-    const members = chatMembers.get(chatId) || new Map();
-    const member = members.get(memberId);
-
-    if (!member) {
-      return await ctx.answerCbQuery('❌ Участник не найден');
-    }
-
-    // Создаем или получаем участника в БД
+    // Создаем или получаем участника
     const participant = await getOrCreateParticipant({
-      id: member.id,
-      username: member.username,
-      first_name: member.firstName,
-      last_name: member.lastName
+      id: ctx.from.id,
+      username: ctx.from.username,
+      first_name: ctx.from.first_name,
+      last_name: ctx.from.last_name
     }, bot);
 
-    const sessionData = sessionToLegacyFormat(session);
-    const isSelected = sessionData.participants.some(p => p.id === memberId);
+    // Обновляем статус участия
+    await updateAttendanceStatus(sessionId, ctx.from.id, status);
 
-    if (isSelected) {
-      // Убираем участника
-      await removeParticipantFromSession(sessionId, participant.id);
-    } else {
-      // Добавляем участника
-      await addParticipantToSession(sessionId, participant.id, 'member');
-    }
+    // Обновляем сообщение
+    const updatedMessage = await formatRegistrationMessage(sessionId);
 
-    // Получаем обновленную сессию
-    const updatedSession = await getSession(sessionId);
-    const updatedSessionData = sessionToLegacyFormat(updatedSession);
-
-    // Обновляем кнопки
-    const memberButtons = [];
-    const membersArray = Array.from(members.values());
-
-    for (let i = 0; i < membersArray.length; i += 2) {
-      const row = [];
-
-      for (let j = 0; j < 2 && i + j < membersArray.length; j++) {
-        const m = membersArray[i + j];
-        const isSelectedNow = updatedSessionData.participants.some(p => p.id === m.id);
-        const checkbox = isSelectedNow ? '✅' : '☐';
-        const name = m.firstName || m.username || 'User';
-
-        row.push({
-          text: `${checkbox} ${name}`,
-          callback_data: `toggle_participant_${sessionId}_${m.id}`
-        });
-      }
-
-      memberButtons.push(row);
-    }
-
-    memberButtons.push([
-      { text: '✅ Готово', callback_data: `finish_selection_${sessionId}` }
+    const keyboard = Markup.inlineKeyboard([
+      [
+        Markup.button.callback('🟢 Точно иду', `status_going_${sessionId}`),
+        Markup.button.callback('🟡 Думаю', `status_maybe_${sessionId}`)
+      ],
+      [
+        Markup.button.callback('🔴 Не иду', `status_not_going_${sessionId}`)
+      ],
+      [
+        Markup.button.url('🚀 Открыть БаняСчет', `https://t.me/banya_schet_bot/banya_check?startapp=${sessionId}`)
+      ]
     ]);
 
-    await ctx.editMessageText(
-      `👥 Выберите участников:\n\nВыбрано: ${updatedSessionData.participants.length}`,
-      {
-        reply_markup: {
-          inline_keyboard: memberButtons
-        }
-      }
-    );
+    await ctx.editMessageText(updatedMessage, keyboard);
 
-    await ctx.answerCbQuery();
+    const statusText = {
+      'going': '✅ Вы в списке!',
+      'maybe': '🟡 Вы в раздумьях',
+      'not_going': '❌ Вы не идете'
+    };
+
+    await ctx.answerCbQuery(statusText[status] || '✅ Статус обновлен');
   } catch (error) {
-    console.error('Error:', error);
+    console.error('Error updating attendance status:', error);
     await ctx.answerCbQuery('❌ Произошла ошибка');
   }
 });
@@ -474,6 +442,7 @@ bot.action(/confirm_session_(.+)/, async (ctx) => {
       venueName: parsedData.venueName || 'Название не указано',
       date: parsedData.date || null,
       time: parsedData.time || null,
+      status: 'active' // Сразу делаем активной
     });
 
     // Добавляем общие расходы
@@ -494,25 +463,34 @@ bot.action(/confirm_session_(.+)/, async (ctx) => {
     // Очищаем состояние
     userStates.delete(ctx.from.id);
 
-    // Формируем сообщение с результатом
-    let message = `✅ Поход создан!\n\n🏛 ${parsedData.venueName || 'Без названия'}\n📅 ${parsedData.date || 'Дата не указана'} в ${parsedData.time || '--:--'}\n`;
+    // Удаляем старое сообщение
+    await ctx.deleteMessage();
 
-    if (parsedData.commonExpenses && parsedData.commonExpenses.length > 0) {
-      message += `\n💰 Общие расходы:\n`;
-      parsedData.commonExpenses.forEach((expense, index) => {
-        message += `  ${index + 1}. ${expense.name} — ${expense.price.toLocaleString('ru-RU')} ₽\n`;
-      });
-    }
-
-    message += `\nТеперь выберите участников:`;
+    // Отправляем сообщение с регистрацией в группу
+    const chatId = Number(session.chatId);
+    const registrationMessage = await formatRegistrationMessage(sessionId);
 
     const keyboard = Markup.inlineKeyboard([
-      [Markup.button.callback('👥 Выбрать участников', `select_participants_${sessionId}`)],
-      [Markup.button.callback('❌ Отмена', 'cancel')]
+      [
+        Markup.button.callback('🟢 Точно иду', `status_going_${sessionId}`),
+        Markup.button.callback('🟡 Думаю', `status_maybe_${sessionId}`)
+      ],
+      [
+        Markup.button.callback('🔴 Не иду', `status_not_going_${sessionId}`)
+      ],
+      [
+        Markup.button.url('🚀 Открыть БаняСчет', `https://t.me/banya_schet_bot/banya_check?startapp=${sessionId}`)
+      ]
     ]);
 
-    await ctx.editMessageText(message, keyboard);
-    await ctx.answerCbQuery('✅ Сессия создана!');
+    const sentMessage = await bot.telegram.sendMessage(chatId, registrationMessage, keyboard);
+
+    // Сохраняем ID сообщения для последующих обновлений
+    await updateSession(sessionId, {
+      registrationMessageId: sentMessage.message_id
+    });
+
+    await ctx.answerCbQuery('✅ Поход создан! Участники могут регистрироваться.');
 
   } catch (error) {
     console.error('Error confirming session:', error);
@@ -655,47 +633,6 @@ bot.action(/back_to_confirm_(.+)/, async (ctx) => {
   await ctx.answerCbQuery();
 });
 
-// Обработка кнопки "Готово" после выбора участников
-bot.action(/finish_selection_(.+)/, async (ctx) => {
-  const sessionId = ctx.match[1];
-  const session = await getSession(sessionId);
-
-  if (!session) {
-    return await ctx.answerCbQuery('❌ Сессия не найдена');
-  }
-
-  const sessionData = sessionToLegacyFormat(session);
-
-  if (sessionData.participants.length === 0) {
-    return await ctx.answerCbQuery('❌ Выберите хотя бы одного участника!');
-  }
-
-  try {
-    // Меняем статус на active
-    await updateSession(sessionId, { status: 'active' });
-
-    // Удаляем старое сообщение
-    await ctx.deleteMessage();
-
-    const participantNames = sessionData.participants.map(p => p.firstName || p.username).join(', ');
-
-    const keyboard = Markup.inlineKeyboard([
-      [Markup.button.url('🚀 Открыть БаняСчет', `https://t.me/banya_schet_bot/banya_check?startapp=${sessionId}`)]
-    ]);
-
-    // Создаём сообщение с инструкцией
-    // Для каждого участника последняя активная сессия будет загружена автоматически
-    await ctx.reply(
-      `✅ Поход создан!\n\n🏛 ${sessionData.venueName}\n📅 ${sessionData.date} в ${sessionData.time}\n👥 Участники (${sessionData.participants.length}): ${participantNames}\n\nСледующие шаги:\n\n1️⃣ Добавьте общие расходы\n   (аренда бани, веники, напитки)\n\n2️⃣ Загрузите чеки\n   (бот распознает позиции автоматически)\n\n3️⃣ Каждый выбирает свои позиции\n   (в режиме реального времени)`,
-      keyboard
-    );
-
-    await ctx.answerCbQuery('✅ Участники сохранены!');
-  } catch (error) {
-    console.error('Error:', error);
-    await ctx.answerCbQuery('❌ Произошла ошибка');
-  }
-});
 
 // Обработка кнопки "Создать новый поход"
 bot.action('create_new_session', async (ctx) => {
