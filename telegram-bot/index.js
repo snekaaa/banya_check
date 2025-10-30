@@ -10,6 +10,8 @@ const {
   getActiveSessionsForChat,
   sessionToLegacyFormat
 } = require('./db-helpers');
+const { parseSessionMessage, formatParsedSession } = require('./openai-service');
+const prisma = require('./prisma-client');
 require('./api-server'); // Запускаем API сервер
 require('./websocket-server'); // Запускаем WebSocket сервер
 
@@ -70,56 +72,130 @@ bot.on('text', async (ctx, next) => {
 
   // Если есть активное состояние FSM
   if (userState) {
-    const session = await getSession(userState.sessionId);
+    // Обработка описания сессии через AI (сессия создается внутри)
+    if (userState.action === 'waiting_session_description') {
+      const messageText = ctx.message.text;
+      const loadingMsg = await ctx.reply('🤖 Анализирую сообщение...');
 
-    if (!session) {
-      userStates.delete(ctx.from.id);
-      return next();
+      try {
+        // Создаём новую сессию в БД
+        const session = await createSession(userState.chatId, ctx.from.id);
+
+        // Парсим сообщение с помощью AI
+        const result = await parseSessionMessage(messageText);
+
+        if (!result.success) {
+          await ctx.telegram.deleteMessage(ctx.chat.id, loadingMsg.message_id);
+          return await ctx.reply(
+            `❌ Не удалось распознать информацию: ${result.error}\n\nПопробуйте описать поход подробнее.`
+          );
+        }
+
+        // Удаляем сообщение о загрузке
+        await ctx.telegram.deleteMessage(ctx.chat.id, loadingMsg.message_id);
+
+        // Сохраняем распознанные данные во временное состояние
+        userStates.set(ctx.from.id, {
+          action: 'confirming_parsed_data',
+          sessionId: session.id,
+          parsedData: result.data
+        });
+
+        // Формируем сообщение с результатом
+        const formattedMessage = formatParsedSession(result.data);
+
+        // Если есть недостающие поля, предупреждаем
+        let warningText = '';
+        if (result.missingFields && result.missingFields.length > 0) {
+          warningText = `\n⚠️ Не удалось распознать: ${result.missingFields.join(', ')}\n`;
+        }
+
+        const keyboard = Markup.inlineKeyboard([
+          [Markup.button.callback('✅ Подтвердить', `confirm_session_${session.id}`)],
+          [Markup.button.callback('✏️ Редактировать', `edit_session_${session.id}`)],
+          [Markup.button.callback('❌ Отмена', 'cancel')]
+        ]);
+
+        return await ctx.reply(
+          formattedMessage + warningText + '\n❓ Всё верно?',
+          keyboard
+        );
+      } catch (error) {
+        console.error('Error parsing session:', error);
+        await ctx.telegram.deleteMessage(ctx.chat.id, loadingMsg.message_id);
+        return await ctx.reply('❌ Произошла ошибка при обработке сообщения. Попробуйте ещё раз.');
+      }
     }
 
-    // Обработка названия бани
-    if (userState.action === 'waiting_venue_name') {
-      await updateSession(session.id, { venueName: ctx.message.text });
+    // Для остальных actions проверяем существование сессии
+    if (userState.action.startsWith('editing_') || userState.action === 'confirming_parsed_data') {
+      const session = await getSession(userState.sessionId);
+      if (!session) {
+        userStates.delete(ctx.from.id);
+        return next();
+      }
+    }
+
+    // Обработка редактирования отдельных полей
+    if (userState.action === 'editing_venue_name') {
+      userState.parsedData.venueName = ctx.message.text;
       userStates.set(ctx.from.id, {
-        action: 'waiting_date',
-        sessionId: userState.sessionId
+        action: 'confirming_parsed_data',
+        sessionId: userState.sessionId,
+        parsedData: userState.parsedData
       });
 
-      return await ctx.reply(
-        `✅ Название: ${ctx.message.text}\n\n📅 Введите дату (например: "16 октября" или "16.10.2025"):`,
-        Markup.inlineKeyboard([[Markup.button.callback('❌ Отмена', 'cancel')]])
-      );
-    }
-
-    // Обработка даты
-    if (userState.action === 'waiting_date') {
-      await updateSession(session.id, { date: ctx.message.text });
-      userStates.set(ctx.from.id, {
-        action: 'waiting_time',
-        sessionId: userState.sessionId
-      });
-
-      return await ctx.reply(
-        `✅ Дата: ${ctx.message.text}\n\n🕐 Введите время (например: "18:00"):`,
-        Markup.inlineKeyboard([[Markup.button.callback('❌ Отмена', 'cancel')]])
-      );
-    }
-
-    // Обработка времени
-    if (userState.action === 'waiting_time') {
-      await updateSession(session.id, { time: ctx.message.text });
-      userStates.delete(ctx.from.id);
-
+      const formattedMessage = formatParsedSession(userState.parsedData);
       const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('👥 Выбрать участников', `select_participants_${session.id}`)],
+        [Markup.button.callback('✅ Подтвердить', `confirm_session_${userState.sessionId}`)],
+        [Markup.button.callback('✏️ Редактировать', `edit_session_${userState.sessionId}`)],
         [Markup.button.callback('❌ Отмена', 'cancel')]
       ]);
 
-      const updatedSession = await getSession(session.id);
-      const sessionData = sessionToLegacyFormat(updatedSession);
+      return await ctx.reply(
+        formattedMessage + '\n❓ Всё верно?',
+        keyboard
+      );
+    }
+
+    if (userState.action === 'editing_date') {
+      userState.parsedData.date = ctx.message.text;
+      userStates.set(ctx.from.id, {
+        action: 'confirming_parsed_data',
+        sessionId: userState.sessionId,
+        parsedData: userState.parsedData
+      });
+
+      const formattedMessage = formatParsedSession(userState.parsedData);
+      const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('✅ Подтвердить', `confirm_session_${userState.sessionId}`)],
+        [Markup.button.callback('✏️ Редактировать', `edit_session_${userState.sessionId}`)],
+        [Markup.button.callback('❌ Отмена', 'cancel')]
+      ]);
 
       return await ctx.reply(
-        `✅ Информация о походе:\n\n🏛 ${sessionData.venueName}\n📅 ${sessionData.date}\n🕐 ${sessionData.time}\n\nТеперь выберите участников:`,
+        formattedMessage + '\n❓ Всё верно?',
+        keyboard
+      );
+    }
+
+    if (userState.action === 'editing_time') {
+      userState.parsedData.time = ctx.message.text;
+      userStates.set(ctx.from.id, {
+        action: 'confirming_parsed_data',
+        sessionId: userState.sessionId,
+        parsedData: userState.parsedData
+      });
+
+      const formattedMessage = formatParsedSession(userState.parsedData);
+      const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('✅ Подтвердить', `confirm_session_${userState.sessionId}`)],
+        [Markup.button.callback('✏️ Редактировать', `edit_session_${userState.sessionId}`)],
+        [Markup.button.callback('❌ Отмена', 'cancel')]
+      ]);
+
+      return await ctx.reply(
+        formattedMessage + '\n❓ Всё верно?',
         keyboard
       );
     }
@@ -128,7 +204,7 @@ bot.on('text', async (ctx, next) => {
   return next();
 });
 
-// Команда /newbanya - создание нового похода
+// Команда /newbanya - создание нового похода с AI парсингом
 bot.command('newbanya', async (ctx) => {
   // Проверяем, что команда вызвана в группе
   if (ctx.chat.type === 'private') {
@@ -158,19 +234,68 @@ bot.command('newbanya', async (ctx) => {
     );
   }
 
-  // Создаём новую сессию в БД
+  // Получаем текст после команды
+  const messageText = ctx.message.text.replace('/newbanya', '').trim();
+
+  if (!messageText) {
+    return await ctx.reply(
+      `🏛 Создание нового похода в баню\n\n💬 Опишите поход одним сообщением.\n\nНапример:\n"Собираемся 4 ноября в 19-00 в Варшавские бани. Забронирован стол на 12 человек. Стоимость стола 20 тыс руб."\n\n📝 Просто отправьте описание в ответ на это сообщение:`,
+      Markup.inlineKeyboard([[Markup.button.callback('❌ Отмена', 'cancel')]])
+    );
+  }
+
+  // Создаём новую сессию в БД (в статусе draft)
   const session = await createSession(ctx.chat.id, ctx.from.id);
 
-  // Устанавливаем состояние для ввода названия бани
-  userStates.set(ctx.from.id, {
-    action: 'waiting_venue_name',
-    sessionId: session.id
-  });
+  // Показываем индикатор загрузки
+  const loadingMsg = await ctx.reply('🤖 Анализирую сообщение...');
 
-  await ctx.reply(
-    `🏛 Создание нового похода в баню\n\n📝 Введите название бани (например: "Жар птица"):`,
-    Markup.inlineKeyboard([[Markup.button.callback('❌ Отмена', 'cancel')]])
-  );
+  try {
+    // Парсим сообщение с помощью AI
+    const result = await parseSessionMessage(messageText);
+
+    if (!result.success) {
+      await ctx.telegram.deleteMessage(ctx.chat.id, loadingMsg.message_id);
+      return await ctx.reply(
+        `❌ Не удалось распознать информацию: ${result.error}\n\nПопробуйте описать поход подробнее.`
+      );
+    }
+
+    // Удаляем сообщение о загрузке
+    await ctx.telegram.deleteMessage(ctx.chat.id, loadingMsg.message_id);
+
+    // Сохраняем распознанные данные во временное состояние
+    userStates.set(ctx.from.id, {
+      action: 'confirming_parsed_data',
+      sessionId: session.id,
+      parsedData: result.data
+    });
+
+    // Формируем сообщение с результатом
+    const formattedMessage = formatParsedSession(result.data);
+
+    // Если есть недостающие поля, предупреждаем
+    let warningText = '';
+    if (result.missingFields && result.missingFields.length > 0) {
+      warningText = `\n⚠️ Не удалось распознать: ${result.missingFields.join(', ')}\n`;
+    }
+
+    const keyboard = Markup.inlineKeyboard([
+      [Markup.button.callback('✅ Подтвердить', `confirm_session_${session.id}`)],
+      [Markup.button.callback('✏️ Редактировать', `edit_session_${session.id}`)],
+      [Markup.button.callback('❌ Отмена', 'cancel')]
+    ]);
+
+    await ctx.reply(
+      formattedMessage + warningText + '\n❓ Всё верно?',
+      keyboard
+    );
+
+  } catch (error) {
+    console.error('Error parsing session:', error);
+    await ctx.telegram.deleteMessage(ctx.chat.id, loadingMsg.message_id);
+    await ctx.reply('❌ Произошла ошибка при обработке сообщения. Попробуйте ещё раз.');
+  }
 });
 
 // Обработка кнопки выбора участников
@@ -321,6 +446,210 @@ bot.action(/toggle_participant_(.+)_(.+)/, async (ctx) => {
   }
 });
 
+// Обработка кнопки "Подтвердить" для созданной AI сессии
+bot.action(/confirm_session_(.+)/, async (ctx) => {
+  const sessionId = ctx.match[1];
+  const userState = userStates.get(ctx.from.id);
+
+  if (!userState || userState.action !== 'confirming_parsed_data' || userState.sessionId !== sessionId) {
+    return await ctx.answerCbQuery('❌ Сессия не найдена или устарела');
+  }
+
+  try {
+    const session = await getSession(sessionId);
+    if (!session) {
+      userStates.delete(ctx.from.id);
+      return await ctx.answerCbQuery('❌ Сессия не найдена');
+    }
+
+    const parsedData = userState.parsedData;
+
+    // Обновляем сессию данными
+    await updateSession(sessionId, {
+      venueName: parsedData.venueName || 'Название не указано',
+      date: parsedData.date || null,
+      time: parsedData.time || null,
+    });
+
+    // Добавляем общие расходы
+    if (parsedData.commonExpenses && parsedData.commonExpenses.length > 0) {
+      for (const expense of parsedData.commonExpenses) {
+        await prisma.checkItem.create({
+          data: {
+            sessionId: sessionId,
+            name: expense.name,
+            price: expense.price,
+            quantity: 1,
+            isCommon: true,
+          }
+        });
+      }
+    }
+
+    // Очищаем состояние
+    userStates.delete(ctx.from.id);
+
+    // Формируем сообщение с результатом
+    let message = `✅ Поход создан!\n\n🏛 ${parsedData.venueName || 'Без названия'}\n📅 ${parsedData.date || 'Дата не указана'} в ${parsedData.time || '--:--'}\n`;
+
+    if (parsedData.commonExpenses && parsedData.commonExpenses.length > 0) {
+      message += `\n💰 Общие расходы:\n`;
+      parsedData.commonExpenses.forEach((expense, index) => {
+        message += `  ${index + 1}. ${expense.name} — ${expense.price.toLocaleString('ru-RU')} ₽\n`;
+      });
+    }
+
+    message += `\nТеперь выберите участников:`;
+
+    const keyboard = Markup.inlineKeyboard([
+      [Markup.button.callback('👥 Выбрать участников', `select_participants_${sessionId}`)],
+      [Markup.button.callback('❌ Отмена', 'cancel')]
+    ]);
+
+    await ctx.editMessageText(message, keyboard);
+    await ctx.answerCbQuery('✅ Сессия создана!');
+
+  } catch (error) {
+    console.error('Error confirming session:', error);
+    await ctx.answerCbQuery('❌ Произошла ошибка при создании сессии');
+  }
+});
+
+// Обработка кнопки "Редактировать"
+bot.action(/edit_session_(.+)/, async (ctx) => {
+  const sessionId = ctx.match[1];
+  const userState = userStates.get(ctx.from.id);
+
+  if (!userState || userState.action !== 'confirming_parsed_data' || userState.sessionId !== sessionId) {
+    return await ctx.answerCbQuery('❌ Сессия не найдена или устарела');
+  }
+
+  const parsedData = userState.parsedData;
+
+  // Формируем кнопки для редактирования
+  const buttons = [];
+
+  if (!parsedData.venueName) {
+    buttons.push([Markup.button.callback('📝 Добавить название бани', `edit_venue_${sessionId}`)]);
+  } else {
+    buttons.push([Markup.button.callback(`✏️ Название: ${parsedData.venueName}`, `edit_venue_${sessionId}`)]);
+  }
+
+  if (!parsedData.date) {
+    buttons.push([Markup.button.callback('📝 Добавить дату', `edit_date_${sessionId}`)]);
+  } else {
+    buttons.push([Markup.button.callback(`✏️ Дата: ${parsedData.date}`, `edit_date_${sessionId}`)]);
+  }
+
+  if (!parsedData.time) {
+    buttons.push([Markup.button.callback('📝 Добавить время', `edit_time_${sessionId}`)]);
+  } else {
+    buttons.push([Markup.button.callback(`✏️ Время: ${parsedData.time}`, `edit_time_${sessionId}`)]);
+  }
+
+  buttons.push([Markup.button.callback('◀️ Назад', `back_to_confirm_${sessionId}`)]);
+
+  const keyboard = Markup.inlineKeyboard(buttons);
+
+  await ctx.editMessageText(
+    '✏️ Выберите, что хотите изменить:',
+    keyboard
+  );
+  await ctx.answerCbQuery();
+});
+
+// Обработчики кнопок редактирования отдельных полей
+bot.action(/edit_venue_(.+)/, async (ctx) => {
+  const sessionId = ctx.match[1];
+  const userState = userStates.get(ctx.from.id);
+
+  if (!userState || userState.sessionId !== sessionId) {
+    return await ctx.answerCbQuery('❌ Сессия не найдена');
+  }
+
+  userStates.set(ctx.from.id, {
+    action: 'editing_venue_name',
+    sessionId: sessionId,
+    parsedData: userState.parsedData
+  });
+
+  await ctx.editMessageText(
+    '📝 Введите новое название бани:',
+    Markup.inlineKeyboard([[Markup.button.callback('❌ Отмена', 'cancel')]])
+  );
+  await ctx.answerCbQuery();
+});
+
+bot.action(/edit_date_(.+)/, async (ctx) => {
+  const sessionId = ctx.match[1];
+  const userState = userStates.get(ctx.from.id);
+
+  if (!userState || userState.sessionId !== sessionId) {
+    return await ctx.answerCbQuery('❌ Сессия не найдена');
+  }
+
+  userStates.set(ctx.from.id, {
+    action: 'editing_date',
+    sessionId: sessionId,
+    parsedData: userState.parsedData
+  });
+
+  await ctx.editMessageText(
+    '📅 Введите новую дату (например: "04.11.2025" или "4 ноября"):',
+    Markup.inlineKeyboard([[Markup.button.callback('❌ Отмена', 'cancel')]])
+  );
+  await ctx.answerCbQuery();
+});
+
+bot.action(/edit_time_(.+)/, async (ctx) => {
+  const sessionId = ctx.match[1];
+  const userState = userStates.get(ctx.from.id);
+
+  if (!userState || userState.sessionId !== sessionId) {
+    return await ctx.answerCbQuery('❌ Сессия не найдена');
+  }
+
+  userStates.set(ctx.from.id, {
+    action: 'editing_time',
+    sessionId: sessionId,
+    parsedData: userState.parsedData
+  });
+
+  await ctx.editMessageText(
+    '🕐 Введите новое время (например: "19:00"):',
+    Markup.inlineKeyboard([[Markup.button.callback('❌ Отмена', 'cancel')]])
+  );
+  await ctx.answerCbQuery();
+});
+
+bot.action(/back_to_confirm_(.+)/, async (ctx) => {
+  const sessionId = ctx.match[1];
+  const userState = userStates.get(ctx.from.id);
+
+  if (!userState || userState.sessionId !== sessionId) {
+    return await ctx.answerCbQuery('❌ Сессия не найдена');
+  }
+
+  userStates.set(ctx.from.id, {
+    action: 'confirming_parsed_data',
+    sessionId: sessionId,
+    parsedData: userState.parsedData
+  });
+
+  const formattedMessage = formatParsedSession(userState.parsedData);
+  const keyboard = Markup.inlineKeyboard([
+    [Markup.button.callback('✅ Подтвердить', `confirm_session_${sessionId}`)],
+    [Markup.button.callback('✏️ Редактировать', `edit_session_${sessionId}`)],
+    [Markup.button.callback('❌ Отмена', 'cancel')]
+  ]);
+
+  await ctx.editMessageText(
+    formattedMessage + '\n❓ Всё верно?',
+    keyboard
+  );
+  await ctx.answerCbQuery();
+});
+
 // Обработка кнопки "Готово" после выбора участников
 bot.action(/finish_selection_(.+)/, async (ctx) => {
   const sessionId = ctx.match[1];
@@ -360,19 +689,16 @@ bot.action(/finish_selection_(.+)/, async (ctx) => {
 
 // Обработка кнопки "Создать новый поход"
 bot.action('create_new_session', async (ctx) => {
-  // Создаём новую сессию в БД
-  const session = await createSession(ctx.chat.id, ctx.from.id);
-
-  // Устанавливаем состояние для ввода названия бани
-  userStates.set(ctx.from.id, {
-    action: 'waiting_venue_name',
-    sessionId: session.id
-  });
-
   await ctx.editMessageText(
-    `🏛 Создание нового похода в баню\n\n📝 Введите название бани (например: "Жар птица"):`,
+    `🏛 Создание нового похода в баню\n\n💬 Опишите поход одним сообщением.\n\nНапример:\n"Собираемся 4 ноября в 19-00 в Варшавские бани. Забронирован стол на 12 человек. Стоимость стола 20 тыс руб."\n\n📝 Просто отправьте описание следующим сообщением:`,
     Markup.inlineKeyboard([[Markup.button.callback('❌ Отмена', 'cancel')]])
   );
+
+  // Устанавливаем состояние ожидания описания
+  userStates.set(ctx.from.id, {
+    action: 'waiting_session_description',
+    chatId: ctx.chat.id
+  });
 
   await ctx.answerCbQuery();
 });

@@ -32,6 +32,7 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-banya_user}:${POSTGRES_PASSWORD:-banya_password}@postgres:5432/${POSTGRES_DB:-banya_db}
       BOT_TOKEN: ${BOT_TOKEN}
       TABSCANNER_API_KEY: ${TABSCANNER_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
       WEB_APP_URL: ${WEB_APP_URL}
       WEBHOOK_URL: ${WEBHOOK_URL:-}
       WEBHOOK_PATH: ${WEBHOOK_PATH:-/webhook}
@@ -45,7 +46,7 @@ services:
       - /app/node_modules
       - /app/generated
       - receipt_uploads:/app/uploads
-    command: sh -c "npx prisma migrate deploy && node index.js"
+    command: sh -c "npx prisma generate && npx prisma migrate deploy && node index.js"
 
   # Next.js приложение
   app:
