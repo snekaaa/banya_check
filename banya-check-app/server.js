@@ -137,17 +137,32 @@ app.prepare().then(() => {
    * Отправить сообщение всем клиентам в сессии
    */
   function broadcastToSession(sessionId, message, excludeClient = null) {
-    if (!sessionRooms.has(sessionId)) return;
+    if (!sessionRooms.has(sessionId)) {
+      console.log('⚠️ [BROADCAST] No room found for session:', sessionId);
+      return;
+    }
 
     const clients = sessionRooms.get(sessionId);
     const messageStr = JSON.stringify(message);
 
+    console.log(`📡 [BROADCAST] Sending "${message.type}" to ${clients.size} clients in session ${sessionId}`);
+    if (excludeClient) {
+      console.log('   (excluding sender)');
+    }
+
+    let sentCount = 0;
     clients.forEach((client) => {
       if (client !== excludeClient && client.readyState === WebSocket.OPEN) {
         client.send(messageStr);
+        sentCount++;
       }
     });
+
+    console.log(`✅ [BROADCAST] Message sent to ${sentCount}/${clients.size} clients`);
   }
+
+  // Экспортируем broadcast функцию глобально для использования в API routes
+  global.broadcastToSession = broadcastToSession;
 
   /**
    * Получить список онлайн пользователей в сессии

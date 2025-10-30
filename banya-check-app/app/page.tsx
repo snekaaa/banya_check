@@ -63,10 +63,17 @@ function HomeContent() {
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [isConfirmed, setIsConfirmed] = useState(false);
   const [isConfirming, setIsConfirming] = useState(false);
+  const [updateTrigger, setUpdateTrigger] = useState(0);
 
   // Функция для перезагрузки данных сессии
   const reloadSessionData = useCallback(async () => {
-    if (!sessionId) return;
+    if (!sessionId) {
+      console.warn('⚠️ [RELOAD] No sessionId provided');
+      return;
+    }
+
+    console.log('🔄 [RELOAD] Starting session data reload...', { sessionId });
+    const startTime = Date.now();
 
     try {
       const response = await fetch(`/api/sessions/${sessionId}`);
@@ -74,9 +81,21 @@ function HomeContent() {
         throw new Error('Session not found');
       }
       const data = await response.json();
+      console.log('✅ [RELOAD] Session data loaded:', {
+        itemsCount: data.items?.length,
+        duration: Date.now() - startTime,
+        timestamp: new Date().toISOString()
+      });
+
       setSessionData(data);
+      // Принудительно триггерим ре-рендер для обновления UI
+      setUpdateTrigger(prev => {
+        const newValue = prev + 1;
+        console.log('🎨 [RELOAD] Triggering re-render:', { oldTrigger: prev, newTrigger: newValue });
+        return newValue;
+      });
     } catch (error) {
-      console.error('Error reloading session:', error);
+      console.error('❌ [RELOAD] Error reloading session:', error);
     }
   }, [sessionId]);
 
@@ -90,6 +109,7 @@ function HomeContent() {
     onExpensesUpdated: reloadSessionData,
     onItemSelectionUpdated: reloadSessionData,
     onSelectionConfirmed: reloadSessionData,
+    onUserJoined: reloadSessionData,
   });
 
   // Отладочное логирование (можно убрать в продакшене)
@@ -164,6 +184,39 @@ function HomeContent() {
         }
         const data = await response.json();
         setSessionData(data);
+
+        // Автоматически присоединяем пользователя к сессии, если он открыл её по ссылке
+        if (sessionIdFromParams && user) {
+          try {
+            const joinResponse = await fetch(`/api/sessions/${sessionIdFromParams}/join`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                telegramUser: {
+                  id: user.id,
+                  username: user.username,
+                  first_name: user.first_name,
+                  last_name: user.last_name,
+                  photo_url: user.photo_url
+                }
+              })
+            });
+
+            if (joinResponse.ok) {
+              const joinResult = await joinResponse.json();
+              console.log('✅ Successfully joined session:', joinResult);
+              // Перезагружаем данные сессии, чтобы отобразить обновленный список участников
+              const updatedResponse = await fetch(url);
+              if (updatedResponse.ok) {
+                const updatedData = await updatedResponse.json();
+                setSessionData(updatedData);
+              }
+            }
+          } catch (joinError) {
+            console.error('Error joining session:', joinError);
+            // Не прерываем загрузку, если не удалось присоединиться
+          }
+        }
       } catch (error) {
         console.error('Error loading session:', error);
       } finally {
@@ -209,6 +262,7 @@ function HomeContent() {
 
         if (response.ok) {
           // Принудительно перезагружаем данные после успешного снятия выбора
+          console.log('✅ [UI] Item unselected successfully, reloading data...', { itemId });
           await reloadSessionData();
         }
       } else {
@@ -224,6 +278,7 @@ function HomeContent() {
 
         if (response.ok) {
           // Принудительно перезагружаем данные после успешного выбора
+          console.log('✅ [UI] Item selected successfully, reloading data...', { itemId, quantity: 1 });
           await reloadSessionData();
         }
       }
@@ -554,6 +609,36 @@ function HomeContent() {
                 </div>
               )}
             </div>
+            <button
+              onClick={(e) => {
+                e.preventDefault();
+                console.log('Share button clicked!', { webApp: !!webApp, sessionId });
+
+                if (webApp && sessionId) {
+                  try {
+                    // Используем deep link формат для открытия Mini App внутри Telegram
+                    const botUsername = process.env.NEXT_PUBLIC_BOT_USERNAME || 'banya_schet_bot';
+                    const appShortName = 'banya_check';
+                    const shareUrl = `https://t.me/${botUsername}/${appShortName}?startapp=${sessionId}`;
+                    const shareText = `Присоединяйтесь к сессии "${sessionData.venueName || 'Баня'}"!`;
+
+                    console.log('Opening share dialog with:', { shareUrl, shareText });
+
+                    // Используем Telegram share API
+                    webApp.openTelegramLink(`https://t.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(shareText)}`);
+                  } catch (error) {
+                    console.error('Error sharing:', error);
+                  }
+                } else {
+                  console.warn('Cannot share:', { webApp: !!webApp, sessionId });
+                }
+              }}
+              className="text-2xl px-2 py-1 active:opacity-50 transition-opacity"
+              title="Пригласить друзей"
+              type="button"
+            >
+              👥➕
+            </button>
           </div>
         </div>
       </div>
@@ -650,7 +735,7 @@ function HomeContent() {
 
           return (
             <div
-              key={item.id}
+              key={`${item.id}-${updateTrigger}`}
               className={`rounded-2xl p-4 transition-all ${
                 isSelected
                   ? 'bg-[var(--tg-theme-button-color,#3390ec)] text-white'

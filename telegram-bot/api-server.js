@@ -14,13 +14,32 @@ const {
   unconfirmParticipantSelection,
   createPayment,
   updatePayment,
-  getParticipantPayments
+  getParticipantPayments,
+  getOrCreateParticipant,
+  addParticipantToSession
 } = require('./db-helpers');
 const { uploadReceiptToTabScanner, getReceiptResult, parseLineItemsToCheckItems } = require('./tabscanner-service');
 const prisma = require('./prisma-client');
-const { broadcastToSession } = require('./websocket-server');
 
 const PORT = 3002;
+const APP_URL = process.env.APP_URL || 'http://app:3000';
+
+// Функция для отправки WebSocket broadcast через HTTP API
+async function broadcastToSession(sessionId, message) {
+  try {
+    const response = await fetch(`${APP_URL}/api/ws-broadcast`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, message })
+    });
+
+    if (!response.ok) {
+      console.error('❌ Failed to broadcast message:', await response.text());
+    }
+  } catch (error) {
+    console.error('❌ Error broadcasting to WebSocket:', error);
+  }
+}
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 
 // Создаем папку для загрузок если её нет
@@ -416,12 +435,24 @@ app.post('/api/items/:itemId/select', async (req, res) => {
 
     // Сохраняем или обновляем выбор
     const selection = await saveItemSelection(itemId, actualParticipantId, parseFloat(quantity));
+    console.log('✅ [SELECT] Item selection saved:', {
+      itemId,
+      participantId: actualParticipantId,
+      quantity: parseFloat(quantity),
+      selectionId: selection.id
+    });
 
     // Отправляем уведомление всем подключенным к сессии
     broadcastToSession(checkItem.sessionId, {
       type: 'item_selection_updated',
       sessionId: checkItem.sessionId,
       itemId: itemId,
+      participantId: actualParticipantId,
+      quantity: parseFloat(quantity)
+    });
+    console.log('📡 [SELECT] Broadcasting item_selection_updated to session:', {
+      sessionId: checkItem.sessionId,
+      itemId,
       participantId: actualParticipantId,
       quantity: parseFloat(quantity)
     });
@@ -480,12 +511,22 @@ app.delete('/api/items/:itemId/unselect', async (req, res) => {
 
     // Удаляем выбор
     await deleteItemSelection(itemId, actualParticipantId);
+    console.log('✅ [UNSELECT] Item selection removed:', {
+      itemId,
+      participantId: actualParticipantId
+    });
 
     // Отправляем уведомление всем подключенным к сессии
     broadcastToSession(checkItem.sessionId, {
       type: 'item_selection_updated',
       sessionId: checkItem.sessionId,
       itemId: itemId,
+      participantId: actualParticipantId,
+      quantity: 0
+    });
+    console.log('📡 [UNSELECT] Broadcasting item_selection_updated to session:', {
+      sessionId: checkItem.sessionId,
+      itemId,
       participantId: actualParticipantId,
       quantity: 0
     });
@@ -635,6 +676,93 @@ app.post('/api/upload-payment-proof', upload.single('image'), async (req, res) =
   } catch (error) {
     console.error('Error uploading payment proof:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/sessions/:sessionId/join - присоединиться к сессии по ссылке
+app.post('/api/sessions/:sessionId/join', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { telegramUser } = req.body;
+
+    if (!telegramUser || !telegramUser.id) {
+      return res.status(400).json({ error: 'telegramUser with id is required' });
+    }
+
+    // Проверяем, что сессия существует
+    const session = await prisma.session.findUnique({
+      where: { id: sessionId }
+    });
+
+    if (!session) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+
+    // Создаем или получаем участника
+    const participant = await getOrCreateParticipant(telegramUser);
+
+    // Проверяем, не является ли пользователь уже участником
+    const existingParticipant = await prisma.sessionParticipant.findUnique({
+      where: {
+        sessionId_participantId: {
+          sessionId,
+          participantId: participant.id
+        }
+      }
+    });
+
+    if (existingParticipant) {
+      return res.json({
+        success: true,
+        message: 'Already a participant',
+        participant: {
+          id: participant.id,
+          telegramId: Number(participant.telegramId),
+          name: participant.firstName || participant.username || 'Аноним'
+        }
+      });
+    }
+
+    // Добавляем участника в сессию
+    await addParticipantToSession(sessionId, participant.id);
+
+    // Отправляем уведомление всем подключенным к сессии
+    broadcastToSession(sessionId, {
+      type: 'user_joined',
+      sessionId: sessionId,
+      userId: Number(participant.telegramId),
+      userName: participant.firstName || participant.username || 'Аноним',
+      userAvatar: participant.avatar,
+      userColor: participant.color,
+      participant: {
+        id: Number(participant.telegramId),
+        name: participant.firstName || participant.username || 'Аноним',
+        username: participant.username,
+        firstName: participant.firstName,
+        lastName: participant.lastName,
+        avatar: participant.avatar,
+        color: participant.color,
+        role: 'member',
+        selectionConfirmed: false,
+        hasPayment: false
+      }
+    });
+
+    res.json({
+      success: true,
+      message: 'Successfully joined session',
+      participant: {
+        id: participant.id,
+        telegramId: Number(participant.telegramId),
+        name: participant.firstName || participant.username || 'Аноним'
+      }
+    });
+  } catch (error) {
+    console.error('Error joining session:', error);
+    res.status(500).json({
+      error: 'Failed to join session',
+      message: error.message
+    });
   }
 });
 

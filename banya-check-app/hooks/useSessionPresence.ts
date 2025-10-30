@@ -18,6 +18,7 @@ interface UseSessionPresenceProps {
   onExpensesUpdated?: () => void;
   onItemSelectionUpdated?: () => void;
   onSelectionConfirmed?: () => void;
+  onUserJoined?: () => void;
 }
 
 type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
@@ -31,6 +32,7 @@ export function useSessionPresence({
   onExpensesUpdated,
   onItemSelectionUpdated,
   onSelectionConfirmed,
+  onUserJoined,
 }: UseSessionPresenceProps) {
   const [onlineUsers, setOnlineUsers] = useState<OnlineUser[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
@@ -172,6 +174,10 @@ export function useSessionPresence({
                   },
                 ];
               });
+              // Перезагружаем данные сессии для обновления списка участников
+              if (onUserJoined) {
+                onUserJoined();
+              }
               break;
 
             case 'user_left':
@@ -194,8 +200,12 @@ export function useSessionPresence({
 
             case 'item_selection_updated':
               // Выбор позиции обновился - перезагружаем данные
+              console.log('📨 [WS] Received item_selection_updated:', message);
               if (onItemSelectionUpdated) {
+                console.log('🔄 [WS] Calling onItemSelectionUpdated callback');
                 onItemSelectionUpdated();
+              } else {
+                console.warn('⚠️ [WS] onItemSelectionUpdated callback not provided!');
               }
               break;
 
@@ -245,7 +255,7 @@ export function useSessionPresence({
       setConnectionStatus('disconnected');
       scheduleReconnect();
     }
-  }, [sessionId, userId, userName, userAvatar, userColor, onExpensesUpdated, onItemSelectionUpdated, startPingInterval, scheduleReconnect]);
+  }, [sessionId, userId, userName, userAvatar, userColor, onExpensesUpdated, onItemSelectionUpdated, onSelectionConfirmed, onUserJoined, startPingInterval, scheduleReconnect]);
 
   // Подключаемся при монтировании и при изменении данных
   useEffect(() => {
