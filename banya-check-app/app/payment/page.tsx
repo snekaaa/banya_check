@@ -3,6 +3,7 @@
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useState, useEffect, Suspense } from 'react';
 import { useTelegramWebApp } from '../../hooks/useTelegramWebApp';
+import { formatPrice } from '../../lib/formatNumber';
 
 interface SessionData {
   id: string;
@@ -54,6 +55,7 @@ function PaymentContent() {
     p => p.id === sessionData.adminId
   );
   const treasurerName = treasurer?.firstName || treasurer?.name || 'Администратор';
+  const treasurerUsername = treasurer?.username;
 
   const handlePaymentConfirm = async () => {
     if (!sessionId || !user?.id) {
@@ -137,7 +139,7 @@ function PaymentContent() {
           {/* Amount card */}
           <div className="bg-[var(--tg-theme-button-color,#3390ec)] rounded-2xl p-6 mb-4 text-center">
             <div className="text-white/70 text-sm mb-2">Ваша сумма к оплате:</div>
-            <div className="text-white text-5xl font-bold">{Math.round(Number(amount))} ₽</div>
+            <div className="text-white text-5xl font-bold">{formatPrice(Number(amount))}</div>
           </div>
 
           {/* Treasurer info */}
@@ -145,14 +147,19 @@ function PaymentContent() {
             <div className="text-sm text-[var(--tg-theme-hint-color,#999999)] mb-2">
               Казначей:
             </div>
-            <div className="text-lg font-semibold text-[var(--tg-theme-text-color,#000000)] mb-3">
+            <div className="text-lg font-semibold text-[var(--tg-theme-text-color,#000000)] mb-1">
               {treasurerName}
             </div>
+            {treasurerUsername && (
+              <div className="text-sm text-[var(--tg-theme-button-color,#3390ec)] mb-3">
+                @{treasurerUsername}
+              </div>
+            )}
 
             {/* Instructions */}
-            <div className="text-sm text-[var(--tg-theme-text-color,#000000)] leading-relaxed">
+            <div className="text-sm text-[var(--tg-theme-text-color,#000000)] leading-relaxed mt-3">
               <p className="mb-2">
-                Переведите <strong>{Math.round(Number(amount))} ₽</strong> казначею
+                Переведите <strong>{formatPrice(Number(amount))}</strong> казначею
               </p>
               <p className="text-[var(--tg-theme-hint-color,#999999)] text-xs">
                 Доступны переводы через СБП по номеру телефона

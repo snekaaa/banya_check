@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
+import { formatPrice } from '../../../lib/formatNumber';
 
 type ParticipantPayment = {
   id: number;
@@ -56,7 +57,7 @@ export default function AdminPayments() {
             <div className="bg-green-50 rounded-2xl p-4 border-2 border-green-200">
               <div className="text-sm text-green-700 mb-1">Собрано</div>
               <div className="text-2xl font-bold text-green-600">
-                {totalCollected} ₽
+                {formatPrice(totalCollected)}
               </div>
               <div className="text-xs text-green-600 mt-1">
                 {paidCount} из {payments.length}
@@ -66,7 +67,7 @@ export default function AdminPayments() {
             <div className="bg-orange-50 rounded-2xl p-4 border-2 border-orange-200">
               <div className="text-sm text-orange-700 mb-1">Ожидается</div>
               <div className="text-2xl font-bold text-orange-600">
-                {totalPending} ₽
+                {formatPrice(totalPending)}
               </div>
               <div className="text-xs text-orange-600 mt-1">
                 {payments.length - paidCount} чел.
@@ -104,7 +105,7 @@ export default function AdminPayments() {
                         {participant.name}
                       </div>
                       <div className="text-sm text-[var(--tg-theme-hint-color,#999999)]">
-                        {participant.amount} ₽
+                        {formatPrice(participant.amount)}
                       </div>
                     </div>
                     <div className="text-green-600 text-2xl">✓</div>
@@ -144,7 +145,7 @@ export default function AdminPayments() {
                         {participant.name}
                       </div>
                       <div className="text-sm text-[var(--tg-theme-hint-color,#999999)]">
-                        {participant.amount} ₽
+                        {formatPrice(participant.amount)}
                       </div>
                     </div>
                     <button

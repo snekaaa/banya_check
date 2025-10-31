@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import Image from 'next/image';
+import { formatPrice } from '../../../lib/formatNumber';
 
 type Participant = {
   id: number;
@@ -102,7 +103,7 @@ export default function AdminParticipants() {
                         {participant.role === 'admin' ? 'Админ' : 'Участник'}
                       </span>
                       <span className="text-sm text-[var(--tg-theme-hint-color,#999999)]">
-                        {participant.amount} ₽
+                        {formatPrice(participant.amount)}
                       </span>
                     </div>
                   </div>
