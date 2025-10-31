@@ -588,14 +588,8 @@ function HomeContent() {
         <div className="px-4 py-3">
           <div className="flex items-center gap-2">
             <button
-              onClick={() => {
-                if (webApp) {
-                  webApp.close();
-                } else {
-                  router.back();
-                }
-              }}
-              className="text-[var(--tg-theme-link-color,#3390ec)]"
+              onClick={() => router.push('/landing')}
+              className="text-[var(--tg-theme-link-color,#3390ec)] text-2xl"
             >
               ←
             </button>
