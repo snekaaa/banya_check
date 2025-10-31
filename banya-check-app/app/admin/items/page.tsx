@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
+import { formatPrice, formatNumber } from '../../../lib/formatNumber';
 
 type CheckItem = {
   id: number;
@@ -71,20 +72,15 @@ export default function AdminItems() {
                     <div className="font-medium text-[var(--tg-theme-text-color,#000000)] mb-1">
                       {item.name}
                     </div>
-                    <div className="flex items-center gap-2 text-sm">
-                      <span className="text-[var(--tg-theme-text-color,#000000)] font-semibold">
-                        {item.price} ₽
-                      </span>
-                      {item.quantity > 1 && (
-                        <span className="text-[var(--tg-theme-hint-color,#999999)]">
-                          × {item.quantity}
-                        </span>
-                      )}
+                    <div className="flex items-center gap-2 text-sm mb-1">
                       {item.isCommon && (
                         <span className="text-xs px-2 py-0.5 rounded bg-blue-100 text-blue-600">
                           общее
                         </span>
                       )}
+                    </div>
+                    <div className="text-sm text-[var(--tg-theme-hint-color,#999999)]">
+                      {formatPrice(item.price)} × {formatNumber(item.quantity)} = {formatPrice(item.price * item.quantity)}
                     </div>
                   </div>
                 </div>

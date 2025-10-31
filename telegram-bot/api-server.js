@@ -350,7 +350,7 @@ app.delete('/api/items/:itemId', async (req, res) => {
 app.post('/api/sessions/:sessionId/expenses', async (req, res) => {
   try {
     const { sessionId } = req.params;
-    const { name, price, isCommon } = req.body;
+    const { name, price, quantity, isCommon } = req.body;
 
     if (!name || !price) {
       return res.status(400).json({ error: 'name and price are required' });
@@ -371,7 +371,7 @@ app.post('/api/sessions/:sessionId/expenses', async (req, res) => {
         sessionId: sessionId,
         name: name.trim(),
         price: parseFloat(price),
-        quantity: 1,
+        quantity: quantity ? parseFloat(quantity) : 1,
         isCommon: Boolean(isCommon),
       }
     });

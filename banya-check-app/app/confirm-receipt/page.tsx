@@ -2,6 +2,7 @@
 
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useState, useEffect, Suspense } from 'react';
+import { formatPrice, formatNumber } from '../../lib/formatNumber';
 
 type CheckItem = {
   name: string;
@@ -211,7 +212,7 @@ function ConfirmReceiptContent() {
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs font-medium text-[var(--tg-theme-hint-color,#999999)] mb-1">
-                      Цена (₽)
+                      Цена за ед. (₽)
                     </label>
                     <input
                       type="number"
@@ -234,6 +235,16 @@ function ConfirmReceiptContent() {
                       min="1"
                       step="0.1"
                     />
+                  </div>
+                </div>
+
+                {/* Item total */}
+                <div className="bg-[var(--tg-theme-button-color,#3390ec)]/10 rounded-lg px-3 py-2">
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs text-[var(--tg-theme-hint-color,#999999)]">Итого за позицию:</span>
+                    <span className="text-base font-bold text-[var(--tg-theme-button-color,#3390ec)]">
+                      {formatPrice(item.price * item.quantity)}
+                    </span>
                   </div>
                 </div>
 
@@ -289,7 +300,7 @@ function ConfirmReceiptContent() {
             <div className="flex items-center justify-between mb-3">
               <span className="text-[var(--tg-theme-hint-color,#999999)]">Общая сумма:</span>
               <span className="text-2xl font-bold text-[var(--tg-theme-text-color,#000000)]">
-                {Math.round(totalAmount)} ₽
+                {formatPrice(totalAmount)}
               </span>
             </div>
             <button
@@ -326,7 +337,7 @@ function ConfirmReceiptContent() {
                     Общая сумма
                   </div>
                   <div className="text-2xl font-bold text-[var(--tg-theme-text-color,#000000)]">
-                    {Math.round(totalAmount)} ₽
+                    {formatPrice(totalAmount)}
                   </div>
                 </div>
               </div>

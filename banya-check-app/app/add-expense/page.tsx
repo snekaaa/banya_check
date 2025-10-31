@@ -2,6 +2,7 @@
 
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useState, useEffect, Suspense } from 'react';
+import { formatPrice } from '../../lib/formatNumber';
 
 function AddExpenseContent() {
   const router = useRouter();
@@ -10,6 +11,7 @@ function AddExpenseContent() {
 
   const [name, setName] = useState('');
   const [price, setPrice] = useState('');
+  const [quantity, setQuantity] = useState('1');
   const [isCommon, setIsCommon] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
@@ -24,10 +26,16 @@ function AddExpenseContent() {
   const handleSubmit = async () => {
     console.log('[AddExpense] handleSubmit called');
     console.log('[AddExpense] sessionId:', sessionId);
-    console.log('[AddExpense] name:', name, 'price:', price, 'isCommon:', isCommon);
+    console.log('[AddExpense] name:', name, 'price:', price, 'quantity:', quantity, 'isCommon:', isCommon);
 
-    if (!name.trim() || !price) {
+    if (!name.trim() || !price || !quantity) {
       alert('Заполните все поля');
+      return;
+    }
+
+    const quantityNum = parseFloat(quantity);
+    if (quantityNum <= 0) {
+      alert('Количество должно быть больше нуля');
       return;
     }
 
@@ -45,6 +53,7 @@ function AddExpenseContent() {
         body: JSON.stringify({
           name: name.trim(),
           price: parseFloat(price),
+          quantity: quantityNum,
           isCommon
         }),
       });
@@ -112,7 +121,7 @@ function AddExpenseContent() {
             {/* Price input */}
             <div>
               <label className="block text-sm font-medium text-[var(--tg-theme-text-color,#000000)] mb-2">
-                Сумма (₽)
+                Цена за единицу (₽)
               </label>
               <input
                 type="number"
@@ -124,6 +133,36 @@ function AddExpenseContent() {
                            focus:border-[var(--tg-theme-button-color,#3390ec)] outline-none"
               />
             </div>
+
+            {/* Quantity input */}
+            <div>
+              <label className="block text-sm font-medium text-[var(--tg-theme-text-color,#000000)] mb-2">
+                Количество
+              </label>
+              <input
+                type="number"
+                value={quantity}
+                onChange={(e) => setQuantity(e.target.value)}
+                placeholder="1"
+                min="0.1"
+                step="0.1"
+                className="w-full px-4 py-3 rounded-xl bg-[var(--tg-theme-secondary-bg-color,#f5f5f5)]
+                           text-[var(--tg-theme-text-color,#000000)] text-xl font-semibold border-2 border-transparent
+                           focus:border-[var(--tg-theme-button-color,#3390ec)] outline-none"
+              />
+            </div>
+
+            {/* Total amount display */}
+            {price && quantity && parseFloat(price) > 0 && parseFloat(quantity) > 0 && (
+              <div className="bg-[var(--tg-theme-button-color,#3390ec)]/10 rounded-xl p-4">
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-[var(--tg-theme-text-color,#000000)]">Итоговая сумма:</span>
+                  <span className="text-2xl font-bold text-[var(--tg-theme-button-color,#3390ec)]">
+                    {formatPrice(parseFloat(price) * parseFloat(quantity))}
+                  </span>
+                </div>
+              </div>
+            )}
 
             {/* Type toggle */}
             <div>
@@ -210,10 +249,24 @@ function AddExpenseContent() {
                   </div>
 
                   <div className="text-sm text-[var(--tg-theme-hint-color,#999999)] mt-3">
-                    Сумма
+                    Цена за единицу
                   </div>
-                  <div className="text-2xl font-bold text-[var(--tg-theme-text-color,#000000)]">
-                    {price} ₽
+                  <div className="text-xl font-bold text-[var(--tg-theme-text-color,#000000)]">
+                    {formatPrice(parseFloat(price))}
+                  </div>
+
+                  <div className="text-sm text-[var(--tg-theme-hint-color,#999999)] mt-3">
+                    Количество
+                  </div>
+                  <div className="text-xl font-bold text-[var(--tg-theme-text-color,#000000)]">
+                    {quantity} шт
+                  </div>
+
+                  <div className="text-sm text-[var(--tg-theme-hint-color,#999999)] mt-3">
+                    Итоговая сумма
+                  </div>
+                  <div className="text-2xl font-bold text-[var(--tg-theme-button-color,#3390ec)]">
+                    {formatPrice(parseFloat(price) * parseFloat(quantity))}
                   </div>
 
                   <div className="text-sm text-[var(--tg-theme-hint-color,#999999)] mt-3">
