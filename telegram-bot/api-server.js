@@ -19,10 +19,17 @@ const {
   addParticipantToSession
 } = require('./db-helpers');
 const { uploadReceiptToTabScanner, getReceiptResult, parseLineItemsToCheckItems } = require('./tabscanner-service');
+const { processReceiptWithRunPod } = require('./runpod-ocr-service');
+const { processReceiptWithLocalVLLM } = require('./local-vllm-ocr-service');
+const { processReceiptWithOllama } = require('./ollama-ocr-service');
 const prisma = require('./prisma-client');
 
 const PORT = 3002;
 const APP_URL = process.env.APP_URL || 'http://app:3000';
+
+// OCR Provider configuration: 'tabscanner', 'runpod', 'local-vllm', 'ollama'
+const OCR_PROVIDER = process.env.OCR_PROVIDER || 'tabscanner';
+console.log(`📋 OCR Provider: ${OCR_PROVIDER}`);
 
 // Функция для отправки WebSocket broadcast через HTTP API
 async function broadcastToSession(sessionId, message) {
@@ -143,8 +150,51 @@ app.post('/api/receipts/upload', upload.single('file'), async (req, res) => {
 
     console.log('✅ Session found:', sessionId);
 
-    // Загружаем чек в TabScanner
-    const { token } = await uploadReceiptToTabScanner(req.file.path);
+    // Выбираем OCR провайдер
+    let result;
+    let token;
+    let status = 'processing';
+    let items = [];
+
+    console.log(`🔄 Using OCR provider: ${OCR_PROVIDER}`);
+
+    if (OCR_PROVIDER === 'ollama') {
+      // Ollama (локальный M4 Pro)
+      console.log('🚀 Processing with Ollama (Apple Silicon)...');
+      const ocrResult = await processReceiptWithOllama(req.file.path);
+
+      items = ocrResult.items;
+      token = `ollama-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      status = 'completed';
+
+      console.log(`✅ Ollama extracted ${items.length} items`);
+    } else if (OCR_PROVIDER === 'local-vllm') {
+      // Локальный vLLM с DeepSeek-OCR
+      console.log('🚀 Processing with local vLLM (DeepSeek-OCR)...');
+      const ocrResult = await processReceiptWithLocalVLLM(req.file.path);
+
+      items = ocrResult.items;
+      token = `local-vllm-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      status = 'completed';
+
+      console.log(`✅ Local vLLM extracted ${items.length} items`);
+    } else if (OCR_PROVIDER === 'runpod') {
+      // RunPod vLLM
+      console.log('🚀 Processing with RunPod vLLM...');
+      const ocrResult = await processReceiptWithRunPod(req.file.path);
+
+      items = ocrResult.items;
+      token = `runpod-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      status = 'completed';
+
+      console.log(`✅ RunPod extracted ${items.length} items`);
+    } else {
+      // TabScanner (default)
+      console.log('🚀 Processing with TabScanner...');
+      const scannerResult = await uploadReceiptToTabScanner(req.file.path);
+      token = scannerResult.token;
+      status = 'processing'; // TabScanner требует polling
+    }
 
     // Сохраняем информацию о чеке в БД
     const receipt = await prisma.receipt.create({
@@ -152,15 +202,33 @@ app.post('/api/receipts/upload', upload.single('file'), async (req, res) => {
         sessionId: sessionId,
         filePath: req.file.path,
         token: token,
-        status: 'processing',
+        status: status,
       }
     });
+
+    // Если уже есть items (local-vllm или runpod), сохраняем их сразу
+    if (items.length > 0) {
+      await prisma.checkItem.createMany({
+        data: items.map(item => ({
+          sessionId: sessionId,
+          receiptId: receipt.id,
+          name: item.name,
+          price: item.price,
+          quantity: item.quantity,
+          isCommon: item.isCommon || false,
+        }))
+      });
+
+      console.log(`✅ Saved ${items.length} items to database`);
+    }
 
     res.json({
       success: true,
       receiptId: receipt.id,
       token: token,
-      status: 'processing',
+      status: status,
+      items: items.length > 0 ? items : undefined,
+      provider: OCR_PROVIDER
     });
   } catch (error) {
     console.error('Error uploading receipt:', error);
@@ -172,6 +240,97 @@ app.post('/api/receipts/upload', upload.single('file'), async (req, res) => {
 
     res.status(500).json({
       error: 'Failed to upload receipt',
+      message: error.message
+    });
+  }
+});
+
+// POST /api/receipts/upload-runpod - загрузка фото чека с использованием RunPod vLLM
+app.post('/api/receipts/upload-runpod', upload.single('file'), async (req, res) => {
+  console.log('📸 Receipt upload request received (RunPod)');
+  try {
+    const { sessionId } = req.body;
+    console.log('SessionId:', sessionId);
+
+    if (!sessionId) {
+      console.log('❌ No sessionId provided');
+      return res.status(400).json({ error: 'sessionId is required' });
+    }
+
+    if (!req.file) {
+      console.log('❌ No file in request');
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    console.log('✅ File received:', req.file.filename, 'Size:', req.file.size);
+
+    // Проверяем, что сессия существует
+    const session = await prisma.session.findUnique({
+      where: { id: sessionId }
+    });
+
+    if (!session) {
+      console.log('❌ Session not found:', sessionId);
+      // Удаляем загруженный файл
+      fs.unlinkSync(req.file.path);
+      return res.status(404).json({ error: 'Session not found' });
+    }
+
+    console.log('✅ Session found:', sessionId);
+
+    // Обрабатываем чек через RunPod vLLM
+    console.log('🚀 Processing receipt with RunPod vLLM...');
+    const { items, rawData } = await processReceiptWithRunPod(req.file.path);
+
+    console.log(`✅ RunPod extracted ${items.length} items`);
+
+    // Генерируем уникальный токен для совместимости с существующей логикой
+    const token = `runpod-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+    // Сохраняем информацию о чеке в БД
+    const receipt = await prisma.receipt.create({
+      data: {
+        sessionId: sessionId,
+        filePath: req.file.path,
+        token: token,
+        status: 'completed',
+        rawData: rawData,
+      }
+    });
+
+    // Сохраняем извлеченные items в БД
+    if (items.length > 0) {
+      await prisma.checkItem.createMany({
+        data: items.map(item => ({
+          sessionId: sessionId,
+          receiptId: receipt.id,
+          name: item.name,
+          price: item.price,
+          quantity: item.quantity,
+          isCommon: item.isCommon || false,
+        }))
+      });
+
+      console.log(`✅ Saved ${items.length} items to database`);
+    }
+
+    res.json({
+      success: true,
+      receiptId: receipt.id,
+      token: token,
+      status: 'completed',
+      items: items,
+    });
+  } catch (error) {
+    console.error('❌ Error processing receipt with RunPod:', error);
+
+    // Удаляем файл в случае ошибки
+    if (req.file && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
+
+    res.status(500).json({
+      error: 'Failed to process receipt with RunPod',
       message: error.message
     });
   }
@@ -192,14 +351,35 @@ app.get('/api/receipts/status/:token', async (req, res) => {
     }
 
     // Если уже обработан, возвращаем сохраненные данные
-    if (receipt.status === 'completed' && receipt.rawData) {
-      const items = parseLineItemsToCheckItems(receipt.rawData.lineItems || []);
-      return res.json({
-        status: 'completed',
-        receiptId: receipt.id,
-        items: items,
-        rawData: receipt.rawData,
-      });
+    if (receipt.status === 'completed') {
+      // Для Ollama/RunPod/local-vllm берём items из БД
+      if (token.startsWith('ollama-') || token.startsWith('runpod-') || token.startsWith('local-vllm-')) {
+        const items = await prisma.checkItem.findMany({
+          where: { receiptId: receipt.id }
+        });
+
+        return res.json({
+          status: 'completed',
+          receiptId: receipt.id,
+          items: items.map(item => ({
+            name: item.name,
+            price: item.price,
+            quantity: item.quantity,
+            isCommon: item.isCommon
+          }))
+        });
+      }
+
+      // Для TabScanner используем rawData
+      if (receipt.rawData) {
+        const items = parseLineItemsToCheckItems(receipt.rawData.lineItems || []);
+        return res.json({
+          status: 'completed',
+          receiptId: receipt.id,
+          items: items,
+          rawData: receipt.rawData,
+        });
+      }
     }
 
     // Если ошибка, возвращаем статус
@@ -210,7 +390,11 @@ app.get('/api/receipts/status/:token', async (req, res) => {
       });
     }
 
-    // Запрашиваем статус у TabScanner
+    // Запрашиваем статус у TabScanner (только для TabScanner токенов)
+    if (token.startsWith('ollama-') || token.startsWith('runpod-') || token.startsWith('local-vllm-')) {
+      return res.json({ status: 'processing' });
+    }
+
     const result = await getReceiptResult(token);
 
     if (result.status === 'processing') {
