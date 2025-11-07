@@ -1,4 +1,5 @@
 const prisma = require('./prisma-client');
+const { downloadAndSaveAvatar } = require('./avatar-service');
 
 // Цвета для аватарок участников
 const COLORS = [
@@ -8,29 +9,31 @@ const COLORS = [
 ];
 
 /**
- * Получить URL аватарки пользователя из Telegram
+ * Обновить аватар участника (вызывается при добавлении в новую сессию)
  */
-async function getTelegramUserAvatar(bot, telegramId) {
+async function updateParticipantAvatar(telegramId, bot) {
+  if (!bot) return;
+
   try {
-    // Получаем фотографии профиля пользователя
-    const photos = await bot.telegram.getUserProfilePhotos(telegramId, 0, 1);
+    const participant = await prisma.participant.findUnique({
+      where: { telegramId: BigInt(telegramId) }
+    });
 
-    if (photos && photos.photos && photos.photos.length > 0) {
-      // Берем первое фото (самое актуальное)
-      const photo = photos.photos[0];
-      // Берем самое большое разрешение (последний элемент в массиве)
-      const fileId = photo[photo.length - 1].file_id;
+    if (!participant) return;
 
-      // Получаем ссылку на файл через Telegram CDN
-      const fileLink = await bot.telegram.getFileLink(fileId);
-      return fileLink.href;
+    // Всегда скачиваем свежий аватар при добавлении в сессию
+    const localAvatarPath = await downloadAndSaveAvatar(bot, telegramId);
+
+    if (localAvatarPath) {
+      await prisma.participant.update({
+        where: { telegramId: BigInt(telegramId) },
+        data: { avatar: localAvatarPath }
+      });
+      console.log(`✅ Updated avatar for participant ${telegramId}: ${localAvatarPath}`);
     }
   } catch (error) {
-    console.log(`⚠️ Не удалось получить аватар для пользователя ${telegramId}:`, error.message);
+    console.error(`❌ Error updating avatar for ${telegramId}:`, error.message);
   }
-
-  // Возвращаем null если не удалось получить аватар
-  return null;
 }
 
 /**
@@ -44,17 +47,12 @@ async function getOrCreateParticipant(telegramUser, bot = null) {
   });
 
   if (!participant) {
-    // Приоритет получения аватара:
-    // 1. photo_url из Telegram WebApp (если передан)
-    // 2. Через Telegram Bot API (если есть bot instance)
-    // 3. Заглушка pravatar.cc
+    // Для новых участников: скачиваем аватар локально
     let avatar = null;
 
-    if (photo_url) {
-      avatar = photo_url;
-      console.log(`✅ Используем photo_url из Telegram WebApp: ${avatar}`);
-    } else if (bot) {
-      avatar = await getTelegramUserAvatar(bot, telegramId);
+    if (bot) {
+      // Скачиваем и сохраняем аватар локально
+      avatar = await downloadAndSaveAvatar(bot, telegramId);
     }
 
     // Если не удалось получить реальный аватар, используем заглушку
@@ -76,23 +74,6 @@ async function getOrCreateParticipant(telegramUser, bot = null) {
     });
 
     console.log(`✅ Создан новый участник ${telegramId} с аватаром: ${avatar}`);
-  } else if (photo_url && (!participant.avatar || participant.avatar.includes('pravatar.cc'))) {
-    // Если передан photo_url и у участника заглушка или нет аватара, обновляем
-    participant = await prisma.participant.update({
-      where: { telegramId: BigInt(telegramId) },
-      data: { avatar: photo_url }
-    });
-    console.log(`✅ Обновлен аватар для участника ${telegramId}: ${photo_url}`);
-  } else if (bot && participant.avatar && participant.avatar.includes('pravatar.cc')) {
-    // Если у существующего участника заглушка, пытаемся обновить на реальный аватар через bot API
-    const realAvatar = await getTelegramUserAvatar(bot, telegramId);
-    if (realAvatar) {
-      participant = await prisma.participant.update({
-        where: { telegramId: BigInt(telegramId) },
-        data: { avatar: realAvatar }
-      });
-      console.log(`✅ Обновлен аватар для участника ${telegramId}: ${realAvatar}`);
-    }
   }
 
   return participant;
@@ -101,7 +82,7 @@ async function getOrCreateParticipant(telegramUser, bot = null) {
 /**
  * Создать новую сессию (поход в баню)
  */
-async function createSession(chatId, adminId) {
+async function createSession(chatId, adminId, adminParticipantId, bot = null) {
   const session = await prisma.session.create({
     data: {
       chatId: BigInt(chatId),
@@ -117,7 +98,19 @@ async function createSession(chatId, adminId) {
     }
   });
 
-  return session;
+  // Automatically add admin as a participant with 'going' status
+  if (adminParticipantId) {
+    console.log('🎯 Adding admin as participant:', { sessionId: session.id, adminParticipantId });
+    await addParticipantToSession(session.id, adminParticipantId, 'admin', 'going', bot);
+    console.log('✅ Admin added as participant');
+  } else {
+    console.log('⚠️ No adminParticipantId provided to createSession');
+  }
+
+  // Fetch updated session with participants
+  const updatedSession = await getSession(session.id);
+  console.log('📊 Session participants count:', updatedSession?.participants?.length || 0);
+  return updatedSession;
 }
 
 /**
@@ -161,7 +154,18 @@ async function updateSession(sessionId, data) {
 /**
  * Добавить участника в сессию
  */
-async function addParticipantToSession(sessionId, participantId, role = 'member', attendanceStatus = 'going') {
+async function addParticipantToSession(sessionId, participantId, role = 'member', attendanceStatus = 'going', bot = null) {
+  // Обновляем аватар если передан bot instance
+  if (bot) {
+    const participant = await prisma.participant.findUnique({
+      where: { id: participantId }
+    });
+
+    if (participant) {
+      await updateParticipantAvatar(Number(participant.telegramId), bot);
+    }
+  }
+
   const sessionParticipant = await prisma.sessionParticipant.upsert({
     where: {
       sessionId_participantId: {
@@ -347,6 +351,22 @@ async function getSessionWithItems(sessionId) {
 }
 
 /**
+ * Преобразовать относительный путь аватара в полный URL
+ */
+function getFullAvatarUrl(avatar) {
+  if (!avatar) return avatar;
+
+  // Если уже полный URL (http/https или pravatar.cc), возвращаем как есть
+  if (avatar.startsWith('http://') || avatar.startsWith('https://')) {
+    return avatar;
+  }
+
+  // Если относительный путь, добавляем базовый URL
+  const baseUrl = process.env.WEB_APP_URL || 'http://bot:3002';
+  return `${baseUrl}${avatar}`;
+}
+
+/**
  * Преобразовать сессию из БД в формат для бота (совместимость со старым кодом)
  * Включает только участников со статусом 'going' (точно идут)
  */
@@ -371,7 +391,7 @@ function sessionToLegacyFormat(session) {
         username: sp.participant.username,
         firstName: sp.participant.firstName,
         lastName: sp.participant.lastName,
-        avatar: sp.participant.avatar,
+        avatar: getFullAvatarUrl(sp.participant.avatar),
         color: sp.participant.color,
         role: sp.role,
         attendanceStatus: sp.attendanceStatus,
@@ -387,7 +407,7 @@ function sessionToLegacyFormat(session) {
       selectedBy: (item.selections || []).map(sel => ({
         userId: Number(sel.participant.telegramId),
         userName: sel.participant.firstName || sel.participant.username || 'Аноним',
-        userAvatar: sel.participant.avatar,
+        userAvatar: getFullAvatarUrl(sel.participant.avatar),
         userColor: sel.participant.color,
         quantity: sel.quantity
       }))

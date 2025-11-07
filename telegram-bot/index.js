@@ -135,8 +135,20 @@ bot.on('text', async (ctx, next) => {
       const loadingMsg = await ctx.reply('🤖 Анализирую сообщение...');
 
       try {
+        // Создаём или получаем участника для админа с аватаром
+        console.log('👤 Creating admin participant (FSM path):', { telegramId: ctx.from.id, firstName: ctx.from.first_name });
+        const adminParticipant = await getOrCreateParticipant({
+          id: ctx.from.id,
+          username: ctx.from.username,
+          first_name: ctx.from.first_name,
+          last_name: ctx.from.last_name,
+          photo_url: null
+        }, ctx.telegram);
+        console.log('✅ Admin participant created (FSM path):', { id: adminParticipant.id, avatar: adminParticipant.avatar });
+
         // Создаём новую сессию в БД
-        const session = await createSession(userState.chatId, ctx.from.id);
+        const session = await createSession(userState.chatId, ctx.from.id, adminParticipant.id, ctx.telegram);
+        console.log('✅ Session created with participants (FSM path):', session.participants?.length || 0);
 
         // Парсим сообщение с помощью AI
         const result = await parseSessionMessage(messageText);
@@ -312,8 +324,20 @@ bot.command('newbanya', async (ctx) => {
     );
   }
 
-  // Создаём новую сессию в БД (в статусе draft)
-  const session = await createSession(ctx.chat.id, ctx.from.id);
+  // Создаём или получаем участника для админа с аватаром
+  console.log('👤 Creating admin participant:', { telegramId: ctx.from.id, firstName: ctx.from.first_name });
+  const adminParticipant = await getOrCreateParticipant({
+    id: ctx.from.id,
+    username: ctx.from.username,
+    first_name: ctx.from.first_name,
+    last_name: ctx.from.last_name,
+    photo_url: null
+  }, ctx.telegram);
+  console.log('✅ Admin participant created:', { id: adminParticipant.id, avatar: adminParticipant.avatar });
+
+  // Создаём новую сессию в БД (в статусе draft) и автоматически добавляем админа как участника
+  const session = await createSession(ctx.chat.id, ctx.from.id, adminParticipant.id, ctx.telegram);
+  console.log('✅ Session created with participants:', session.participants?.length || 0);
 
   // Показываем индикатор загрузки
   const loadingMsg = await ctx.reply('🤖 Анализирую сообщение...');

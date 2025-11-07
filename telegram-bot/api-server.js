@@ -48,10 +48,14 @@ async function broadcastToSession(sessionId, message) {
   }
 }
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
+const AVATARS_DIR = path.join(__dirname, 'avatars');
 
-// Создаем папку для загрузок если её нет
+// Создаем папки если их нет
 if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
+if (!fs.existsSync(AVATARS_DIR)) {
+  fs.mkdirSync(AVATARS_DIR, { recursive: true });
 }
 
 // Настройка multer для загрузки файлов
@@ -85,6 +89,10 @@ const app = express();
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+// Serve static files (uploads and avatars)
+app.use('/uploads', express.static(UPLOADS_DIR));
+app.use('/avatars', express.static(AVATARS_DIR));
 
 // GET /api/session/:id or /api/sessions/:id
 app.get(['/api/session/:id', '/api/sessions/:id'], async (req, res) => {

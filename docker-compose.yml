@@ -51,6 +51,7 @@ services:
       - /app/node_modules
       - /app/generated
       - receipt_uploads:/app/uploads
+      - avatar_uploads:/app/avatars
     command: sh -c "npx prisma generate && npx prisma migrate deploy && node index.js"
 
   # Next.js приложение
@@ -95,4 +96,6 @@ volumes:
   postgres_data:
     driver: local
   receipt_uploads:
+    driver: local
+  avatar_uploads:
     driver: local
