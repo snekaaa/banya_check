@@ -39,10 +39,9 @@ services:
       PORT: ${BOT_PORT:-3001}
       OCR_PROVIDER: ${OCR_PROVIDER:-tabscanner}
       OLLAMA_URL: http://host.docker.internal:11434
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-llava:7b}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2-vision:11b}
       RUNPOD_API_KEY: ${RUNPOD_API_KEY:-}
       RUNPOD_ENDPOINT_URL: ${RUNPOD_ENDPOINT_URL:-}
-      LOCAL_VLLM_URL: http://vllm-ocr:8000
     ports:
       - "${BOT_PORT:-3001}:${BOT_PORT:-3001}"
       - "3002:3002"
@@ -92,49 +91,8 @@ services:
     depends_on:
       - app
 
-  # vLLM OCR сервис (локальный)
-  vllm-ocr:
-    image: vllm/vllm-openai:latest
-    container_name: banya-vllm-ocr
-    restart: unless-stopped
-    ports:
-      - "8000:8000"
-    environment:
-      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
-    command:
-      - "--model"
-      - "deepseek-ai/DeepSeek-OCR"
-      - "--trust-remote-code"
-      - "--gpu-memory-utilization"
-      - "0.9"
-      - "--max-model-len"
-      - "8192"
-      - "--dtype"
-      - "bfloat16"
-      - "--host"
-      - "0.0.0.0"
-      - "--port"
-      - "8000"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    volumes:
-      - vllm_cache:/root/.cache/huggingface
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 120s
-
 volumes:
   postgres_data:
     driver: local
   receipt_uploads:
-    driver: local
-  vllm_cache:
     driver: local
