@@ -109,6 +109,8 @@ function ConfirmReceiptContent() {
     setSaving(true);
     setError(null);
 
+    console.log('Отправляем на сервер позиций:', items.length, items);
+
     try {
       // Используем Next.js API route для проксирования
       const response = await fetch('/api/receipts/confirm', {

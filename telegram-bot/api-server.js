@@ -203,24 +203,14 @@ app.post('/api/receipts/upload', upload.single('file'), async (req, res) => {
         filePath: req.file.path,
         token: token,
         status: status,
+        // Сохраняем распознанные items как JSON для отображения на экране подтверждения
+        rawData: items.length > 0 ? JSON.stringify(items) : null,
       }
     });
 
-    // Если уже есть items (local-vllm или runpod), сохраняем их сразу
-    if (items.length > 0) {
-      await prisma.checkItem.createMany({
-        data: items.map(item => ({
-          sessionId: sessionId,
-          receiptId: receipt.id,
-          name: item.name,
-          price: item.price,
-          quantity: item.quantity,
-          isCommon: item.isCommon || false,
-        }))
-      });
-
-      console.log(`✅ Saved ${items.length} items to database`);
-    }
+    // НЕ сохраняем items в БД автоматически!
+    // Они будут сохранены только после подтверждения пользователем через /api/receipts/confirm
+    console.log(`✅ Receipt created with ${items.length} recognized items (not saved yet, waiting for confirmation)`);
 
     res.json({
       success: true,
@@ -298,21 +288,9 @@ app.post('/api/receipts/upload-runpod', upload.single('file'), async (req, res) 
       }
     });
 
-    // Сохраняем извлеченные items в БД
-    if (items.length > 0) {
-      await prisma.checkItem.createMany({
-        data: items.map(item => ({
-          sessionId: sessionId,
-          receiptId: receipt.id,
-          name: item.name,
-          price: item.price,
-          quantity: item.quantity,
-          isCommon: item.isCommon || false,
-        }))
-      });
-
-      console.log(`✅ Saved ${items.length} items to database`);
-    }
+    // НЕ сохраняем items в БД автоматически!
+    // Они будут сохранены только после подтверждения пользователем через /api/receipts/confirm
+    console.log(`✅ Receipt created with ${items.length} recognized items (not saved yet, waiting for confirmation)`);
 
     res.json({
       success: true,
@@ -350,36 +328,38 @@ app.get('/api/receipts/status/:token', async (req, res) => {
       return res.status(404).json({ error: 'Receipt not found' });
     }
 
-    // Если уже обработан, возвращаем сохраненные данные
+    // Если уже обработан, возвращаем распознанные данные из rawData
     if (receipt.status === 'completed') {
-      // Для Ollama/RunPod/local-vllm берём items из БД
-      if (token.startsWith('ollama-') || token.startsWith('runpod-') || token.startsWith('local-vllm-')) {
-        const items = await prisma.checkItem.findMany({
-          where: { receiptId: receipt.id }
-        });
-
-        return res.json({
-          status: 'completed',
-          receiptId: receipt.id,
-          items: items.map(item => ({
-            name: item.name,
-            price: item.price,
-            quantity: item.quantity,
-            isCommon: item.isCommon
-          }))
-        });
-      }
-
-      // Для TabScanner используем rawData
+      // Для всех провайдеров берём items из rawData (они ещё не сохранены в БД!)
       if (receipt.rawData) {
-        const items = parseLineItemsToCheckItems(receipt.rawData.lineItems || []);
+        let items;
+
+        // Для TabScanner rawData - это объект с lineItems
+        if (typeof receipt.rawData === 'object' && receipt.rawData.lineItems) {
+          items = parseLineItemsToCheckItems(receipt.rawData.lineItems || []);
+        }
+        // Для Ollama/RunPod/local-vllm rawData - это JSON-строка с массивом items
+        else if (typeof receipt.rawData === 'string') {
+          items = JSON.parse(receipt.rawData);
+        }
+        // Если rawData уже массив (на случай если это объект в БД)
+        else if (Array.isArray(receipt.rawData)) {
+          items = receipt.rawData;
+        }
+
         return res.json({
           status: 'completed',
           receiptId: receipt.id,
-          items: items,
-          rawData: receipt.rawData,
+          items: items || [],
         });
       }
+
+      // Если rawData пусто, возвращаем пустой массив
+      return res.json({
+        status: 'completed',
+        receiptId: receipt.id,
+        items: [],
+      });
     }
 
     // Если ошибка, возвращаем статус
@@ -443,6 +423,13 @@ app.post('/api/receipts/confirm', async (req, res) => {
   try {
     const { receiptId, items, sessionId } = req.body;
 
+    console.log('📋 Получен запрос на подтверждение чека:', {
+      receiptId,
+      sessionId,
+      itemsCount: items?.length,
+      items: items
+    });
+
     if (!receiptId || !items || !Array.isArray(items)) {
       return res.status(400).json({ error: 'receiptId and items array are required' });
     }
@@ -476,6 +463,8 @@ app.post('/api/receipts/confirm', async (req, res) => {
         })
       )
     );
+
+    console.log('✅ Создано позиций:', createdItems.length);
 
     res.json({
       success: true,
